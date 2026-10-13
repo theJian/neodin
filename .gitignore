@@ -1,0 +1,4 @@
+/build/
+/research/
+*.dSYM/
+__pycache__/
