@@ -1,0 +1,16 @@
+{
+  "nvim": "nvim",
+  "font": "",
+  "fallback_fonts": [],
+  "font_size": 16,
+  "line_spacing": 2,
+  "columns": 100,
+  "rows": 32,
+  "padding": 4,
+  "renderer": "auto",
+  "vsync": true,
+  "fullscreen": false,
+  "cursor_blink": true,
+  "option_as_alt": false,
+  "background_opacity": 1.0
+}
