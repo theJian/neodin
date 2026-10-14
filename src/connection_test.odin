@@ -2,7 +2,6 @@ package main
 
 import "core:testing"
 import "core:time"
-import "core:os"
 
 @(test)
 test_tcp_and_local_socket_connections :: proc(t: ^testing.T) {
@@ -44,8 +43,8 @@ test_neovim_012_restart_and_reattach :: proc(t: ^testing.T) {
 	start := time.tick_now()
 	for time.tick_since(start) < 5*time.Second {
 		editor_pump(&r, &ui)
-		state, _ := os.process_wait(r.process, 0)
-		if state.exited {r.exited = true; break}
+		exited, _ := rpc_poll_exit(&r)
+		if exited {r.exited = true; break}
 		time.sleep(time.Millisecond)
 	}
 	testing.expect(t, r.exited && ui.restart && ui.reconnect_address != "")

@@ -139,3 +139,12 @@ test_version_gate_before_ui_attach :: proc(t: ^testing.T) {
 		testing.expect(t, r.channel == 7 && !r.attached)
 	}
 }
+
+@(test)
+test_stdin_argument_is_not_an_option_value :: proc(t: ^testing.T) {
+	testing.expect(t, nvim_reads_stdin({"--clean", "-"}))
+	testing.expect(t, nvim_reads_stdin({"--", "-"}))
+	testing.expect(t, !nvim_reads_stdin({"-c", "-"}))
+	testing.expect(t, !nvim_reads_stdin({"-u", "-"}))
+	testing.expect(t, nvim_reads_stdin({"-u", "-", "-"}))
+}

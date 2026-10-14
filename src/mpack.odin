@@ -16,6 +16,9 @@ Read_Fn :: #type proc "c" (rawptr, [^]byte, c.size_t) -> c.size_t
 
 @(default_calling_convention="c")
 foreign rpc_lib {
+	nd_transport_spawn :: proc(argv: [^]cstring, forward_stdin: c.int) -> rawptr ---
+	nd_transport_exited :: proc(transport: rawptr, code: ^c.int) -> c.int ---
+	nd_transport_stop :: proc(transport: rawptr, terminate: c.int) ---
 	nd_transport_connect :: proc(address: cstring) -> rawptr ---
 	nd_transport_free :: proc(transport: rawptr) ---
 	nd_transport_read :: proc(transport: rawptr, data: [^]byte, size: c.size_t) -> c.size_t ---

@@ -192,12 +192,12 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool, server := "") 
 			if nd_reader_parse(app.rpc.reader) == 0 {break}
 			app_message(&app, nd_reader_root(app.rpc.reader))
 		}
-		exited, exit_code := false, 0
-		if app.rpc.transport == nil {
-			state, _ := os.process_wait(app.rpc.process, 0)
-			exited, exit_code = state.exited, state.exit_code
-		}
+		exited, exit_code := rpc_poll_exit(&app.rpc)
 		app.rpc.exited = exited
+		if exited {
+			// A final redraw may carry :restart even when the process already exited.
+			for nd_reader_parse(app.rpc.reader) != 0 {app_message(&app, nd_reader_root(app.rpc.reader))}
+		}
 		if app.ui.reconnect_address != "" && (!app.ui.restart || exited || nd_reader_error(app.rpc.reader) != 0) {
 			if !app_reconnect(&app) {return 1}
 			continue

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the small MPack bridge, then the Odin application or tests."""
+"""Build the native dependency bridge, then the Odin application or tests."""
 import argparse
 import os
 from pathlib import Path
@@ -34,7 +34,7 @@ if os.name == 'nt':
     for dll in (library_dir.parent / 'bin').glob('*.dll'):
         shutil.copy2(dll, root / 'build' / dll.name)
 if args.action == 'test':
-    # Odin's process_start API is not thread-safe; serialize integration tests.
+    # Keep embedded editor integration tests deterministic and serialized.
     command += ['-define:ODIN_TEST_THREADS=1']
 if args.action != 'check':
     command += [('-out:build/neodin-tests' if args.action == 'test' else '-out:build/neodin') + ('.exe' if os.name == 'nt' else '')]

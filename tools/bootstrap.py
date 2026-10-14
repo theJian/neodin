@@ -104,6 +104,7 @@ def sdl_dependencies():
     else:
         raise RuntimeError('On macOS install libraries with: brew install sdl3 sdl3_ttf utf8proc libuv')
     folder = fetch('JuliaStrings/utf8proc', f'v{UTF8PROC}', f'utf8proc-{UTF8PROC}.tar.gz', BUILD / 'sources',
+                   digest='abfed50b6d4da51345713661370290f4f4747263ee73dc90356299dfc7990c78',
                    url=f'https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v{UTF8PROC}.tar.gz')
     binary = BUILD / 'deps-build/utf8proc'
     run('cmake', '-S', str(folder / f'utf8proc-{UTF8PROC}'), '-B', str(binary),
@@ -112,6 +113,7 @@ def sdl_dependencies():
     run('cmake', '--build', str(binary), '--config', 'Release', '--parallel', '4')
     run('cmake', '--install', str(binary), '--config', 'Release')
     folder = fetch('libuv/libuv', f'v{LIBUV}', f'libuv-v{LIBUV}.tar.gz', BUILD / 'sources',
+                   digest='66d511b9e6e334c0e62279eb234fbfb2b3110b1479c09b95b44c7afca8cff9e7',
                    url=f'https://dist.libuv.org/dist/v{LIBUV}/libuv-v{LIBUV}.tar.gz')
     binary = BUILD / 'deps-build/libuv'
     run('cmake', '-S', str(folder / f'libuv-v{LIBUV}'), '-B', str(binary),

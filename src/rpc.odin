@@ -10,7 +10,6 @@ Pending_Kind :: enum {General, Attach, Input, Api_Info, Paste}
 Pending :: struct {kind: Pending_Kind, method: string, bytes: int}
 Input_Job :: struct {kind: Pending_Kind, text: string, offset: int}
 RPC :: struct {
-	process: os.Process,
 	input, output: ^os.File,
 	reader: rawptr,
 	transport: rawptr,
@@ -22,7 +21,7 @@ RPC :: struct {
 	channel: int,
 	ui_size: [2]int,
 	exited: bool,
-	spawned: bool,
+	spawned, stdin_forwarded: bool,
 }
 
 pipe_read :: proc "c" (user: rawptr, data: [^]byte, size: c.size_t) -> c.size_t {
@@ -38,12 +37,6 @@ pipe_read :: proc "c" (user: rawptr, data: [^]byte, size: c.size_t) -> c.size_t 
 }
 
 rpc_start :: proc(r: ^RPC, executable: string, args: []string, guifont := "", linespace := 0, widefont := "") -> bool {
-	stdin_r, stdin_w, err := os.pipe()
-	if err != nil {fmt.eprintln("Neovim stdin:", err); return false}
-	defer os.close(stdin_r)
-	stdout_r, stdout_w, out_err := os.pipe()
-	if out_err != nil {os.close(stdin_w); return false}
-	defer os.close(stdout_w)
 	command := make([dynamic]string)
 	defer delete(command)
 	append(&command, executable, "--embed", "--cmd", "let g:neodin = 1")
@@ -56,19 +49,31 @@ rpc_start :: proc(r: ^RPC, executable: string, args: []string, guifont := "", li
 		escaped, _ := strings.replace_all(guifont, "'", "''", context.temp_allocator)
 		append(&command, "--cmd", fmt.tprintf("let &guifont = '%s'", escaped))
 	}
+	r.stdin_forwarded = nvim_reads_stdin(args)
 	append(&command, ..args)
-	p, start_err := os.process_start({command = command[:], stdin = stdin_r, stdout = stdout_w, stderr = os.stderr})
-	if start_err != nil {
-		os.close(stdin_w); os.close(stdout_r)
-		fmt.eprintln("Cannot start Neovim:", start_err)
-		return false
-	}
-	r.process = p; r.input = stdin_w; r.output = stdout_r
+	argv := make([]cstring, len(command)+1, context.temp_allocator)
+	for arg, i in command {argv[i] = strings.clone_to_cstring(arg, context.temp_allocator)}
+	r.transport = nd_transport_spawn(raw_data(argv), c.int(1 if r.stdin_forwarded else 0))
+	if r.transport == nil {fmt.eprintf("Cannot start Neovim: %s\n", executable); return false}
 	r.spawned = true
 	r.pending = make(map[i64]Pending)
 	r.reader = nd_reader_new(pipe_read, r)
 	if r.reader == nil {rpc_destroy(r); return false}
 	return true
+}
+
+nvim_reads_stdin :: proc(args: []string) -> bool {
+	value, files_only := false, false
+	for arg in args {
+		if value {value = false; continue}
+		if arg == "-" {return true}
+		if files_only {continue}
+		if arg == "--" {files_only = true; continue}
+		switch arg {
+		case "-c", "--cmd", "-u", "-i", "-s", "-S", "-l", "-t", "-q", "-w", "-W", "--listen", "--server", "--remote-send", "--remote-expr": value = true
+		}
+	}
+	return false
 }
 
 rpc_connect :: proc(r: ^RPC, address: string) -> bool {
@@ -82,15 +87,10 @@ rpc_connect :: proc(r: ^RPC, address: string) -> bool {
 
 rpc_destroy :: proc(r: ^RPC, terminate := true) {
 	// Closing stdin gives Neovim EOF; force termination only after a bounded wait.
-	if r.transport != nil {nd_transport_free(r.transport)}
-	else if r.spawned {
-		os.close(r.input)
-		if !r.exited {
-			state, _ := os.process_wait(r.process, 250_000_000)
-			if !state.exited && terminate {_ = os.process_kill(r.process); _, _ = os.process_wait(r.process)}
-		}
-		os.close(r.output)
-	}
+	if r.transport != nil {
+		nd_transport_stop(r.transport, c.int(1 if terminate else 0))
+		nd_transport_free(r.transport)
+	} else {os.close(r.input); os.close(r.output)}
 	if r.reader != nil {nd_reader_free(r.reader)}
 	for job in r.input_queue {delete(job.text)}
 	delete(r.pending); delete(r.input_queue)
@@ -237,6 +237,7 @@ rpc_attach_ui :: proc(r: ^RPC) {
 	// --embed pauses user startup until attach, so init.lua can override this.
 	rpc_lua(r, CLIPBOARD_SETUP, {i64(r.channel)})
 	options := make(map[string]Value)
+	if r.stdin_forwarded {options["stdin_fd"] = i64(3)}
 	options["rgb"] = true
 	options["ext_linegrid"] = true
 	options["ext_multigrid"] = true
@@ -247,4 +248,12 @@ rpc_attach_ui :: proc(r: ^RPC) {
 	options["ext_messages"] = true
 	defer delete(options)
 	_ = rpc_request(r, "nvim_ui_attach", {i64(r.ui_size[0]), i64(r.ui_size[1]), options}, .Attach)
+}
+
+rpc_poll_exit :: proc(r: ^RPC) -> (exited: bool, exit_code: int) {
+	if !r.spawned || r.transport == nil {return}
+	code: c.int
+	exited = nd_transport_exited(r.transport, &code) != 0
+	exit_code = int(code)
+	return
 }
