@@ -14,6 +14,9 @@ args = parser.parse_args()
 subprocess.run(['cmake', '-S', str(root / 'native'), '-B', str(root / 'build'), '-DCMAKE_BUILD_TYPE=Release'], check=True)
 subprocess.run(['cmake', '--build', str(root / 'build'), '--config', 'Release', '--parallel'], check=True)
 command = ['odin', args.action, 'src', '-strict-style', '-vet', '-warnings-as-errors']
+if args.action == 'test':
+    # Odin's process_start API is not thread-safe; serialize integration tests.
+    command += ['-define:ODIN_TEST_THREADS=1']
 if args.action != 'check':
     command += [('-out:build/neodin-tests' if args.action == 'test' else '-out:build/neodin') + ('.exe' if os.name == 'nt' else '')]
 if args.release:
@@ -23,4 +26,7 @@ if args.action != 'check' and sys.platform == 'darwin':
     command += [f'-extra-linker-flags:-L{prefix}/lib -Wl,-rpath,{prefix}/lib']
 elif args.action != 'check' and os.environ.get('SDL_LIBRARY_DIR'):
     command += [f'-extra-linker-flags:-L{os.environ["SDL_LIBRARY_DIR"]}']
-subprocess.run(command, cwd=root, check=True)
+environment = os.environ.copy()
+if args.action == "test":
+    environment["NVIM_LOG_FILE"] = str(root / "build/test-nvim.log")
+subprocess.run(command, cwd=root, env=environment, check=True)

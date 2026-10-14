@@ -3,9 +3,11 @@ package main
 import "core:c"
 
 when ODIN_OS == .Windows {
-	foreign import rpc_lib "../build/neodin_rpc.lib"
+	foreign import rpc_lib {"../build/neodin_rpc.lib", "system:Advapi32.lib"}
+} else when ODIN_OS == .Darwin {
+	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:CoreText.framework", "system:CoreFoundation.framework"}
 } else {
-	foreign import rpc_lib "../build/libneodin_rpc.a"
+	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:fontconfig"}
 }
 
 Node :: struct {data, tree: rawptr}
@@ -14,6 +16,7 @@ Read_Fn :: #type proc "c" (rawptr, [^]byte, c.size_t) -> c.size_t
 
 @(default_calling_convention="c")
 foreign rpc_lib {
+	nd_font_path :: proc(name: cstring) -> cstring ---
 	nd_reader_new :: proc(read: Read_Fn, user: rawptr) -> rawptr ---
 	nd_reader_parse :: proc(r: rawptr) -> c.int ---
 	nd_reader_error :: proc(r: rawptr) -> c.int ---

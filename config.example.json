@@ -12,5 +12,5 @@
   "fullscreen": false,
   "cursor_blink": true,
   "option_as_alt": false,
-  "background_opacity": 1.0
+  "window_opacity": 1.0
 }
