@@ -54,7 +54,7 @@ text_input :: proc(s: string) -> string {
 	return result
 }
 mouse_position :: proc(d: ^Display, ui: ^UI, x, y: f32) -> (row, col: int) {
-	return clamp(int((y*d.density-d.padding)/d.cell_height), 0, max(ui.grid.height-1, 0)),
+	return clamp(int((y*d.density-d.grid_top)/d.cell_height), 0, max(ui.grid.height-1, 0)),
 		clamp(int((x*d.density-d.padding)/d.cell_width), 0, max(ui.grid.width-1, 0))
 }
 mouse_input :: proc(r: ^RPC, d: ^Display, ui: ^UI, button, action: string, x, y: f32, mod: sdl.Keymod, clicks := 1) {

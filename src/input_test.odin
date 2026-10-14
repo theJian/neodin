@@ -30,7 +30,7 @@ test_input_chunk_boundaries :: proc(t: ^testing.T) {
 
 @(test)
 test_mouse_coordinates_at_fractional_dpi :: proc(t: ^testing.T) {
-	d := Display{cell_width = 15, cell_height = 30, padding = 6, scale = 1.5, density = 1}
+	d := Display{cell_width = 15, cell_height = 30, padding = 6, grid_top = 6, scale = 1.5, density = 1}
 	ui := UI{grid = Grid{width = 80, height = 24}}
 	row, col := mouse_position(&d, &ui, 36, 66)
 	testing.expect(t, row == 2 && col == 2)

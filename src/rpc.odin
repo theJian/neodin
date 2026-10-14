@@ -211,6 +211,11 @@ rpc_attach_ui :: proc(r: ^RPC) {
 	options["rgb"] = true
 	options["ext_linegrid"] = true
 	options["ext_multigrid"] = true
+	options["ext_hlstate"] = true
+	options["ext_cmdline"] = true
+	options["ext_popupmenu"] = true
+	options["ext_tabline"] = true
+	options["ext_messages"] = true
 	defer delete(options)
 	_ = rpc_request(r, "nvim_ui_attach", {i64(r.ui_size[0]), i64(r.ui_size[1]), options}, .Attach)
 }

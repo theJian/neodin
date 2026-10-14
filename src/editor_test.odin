@@ -96,7 +96,7 @@ test_splits_resize_mouse_and_terminal :: proc(t: ^testing.T) {
 	testing.expect(t, mode == "v")
 	rpc_input(&r, "<Esc>")
 	testing.expect(t, editor_wait(&r, &ui))
-	rpc_lua(&r, "vim.cmd('enew'); vim.fn.termopen({'nvim','--headless','--clean','+q'})")
+	rpc_lua(&r, "vim.cmd('enew'); vim.fn.jobstart({'nvim','--headless','--clean','+q'}, {term=true})")
 	testing.expect(t, editor_wait(&r, &ui))
 	type := editor_eval(&r, &ui, "return vim.bo.buftype")
 	defer delete(type)
@@ -165,6 +165,8 @@ test_cancel_close_preserves_unsaved_buffer :: proc(t: ^testing.T) {
 		editor_pump(&r, &ui)
 		b := strings.builder_make(context.temp_allocator)
 		for cell in ui.grid.cells {strings.write_string(&b, cell.text)}
+		for message in ui.widgets.messages {strings.write_string(&b, rich_plain(message.content))}
+		for _, line in ui.widgets.cmdlines {strings.write_string(&b, line.prompt); strings.write_string(&b, rich_plain(line.content))}
 		if strings.contains(strings.to_string(b), "ancel") {confirmation = true; break}
 		time.sleep(time.Millisecond)
 	}

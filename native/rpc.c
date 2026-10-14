@@ -49,6 +49,7 @@ void nd_array_end(writer *w) { mpack_finish_array(&w->writer); }
 void nd_map(writer *w, uint32_t n) { mpack_start_map(&w->writer, n); }
 void nd_map_end(writer *w) { mpack_finish_map(&w->writer); }
 void nd_write_int(writer *w, int64_t n) { mpack_write_i64(&w->writer, n); }
+void nd_write_number(writer *w, double n) { mpack_write_double(&w->writer, n); }
 void nd_write_bool(writer *w, bool b) { mpack_write_bool(&w->writer, b); }
 void nd_write_nil(writer *w) { mpack_write_nil(&w->writer); }
 void nd_write_str(writer *w, const char *p, uint32_t n) { mpack_write_str(&w->writer, p, n); }

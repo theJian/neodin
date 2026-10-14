@@ -3,11 +3,11 @@ package main
 import "core:c"
 
 when ODIN_OS == .Windows {
-	foreign import rpc_lib {"../build/neodin_rpc.lib", "system:Advapi32.lib"}
+	foreign import rpc_lib {"../build/neodin_rpc.lib", "system:Advapi32.lib", "system:utf8proc.lib"}
 } else when ODIN_OS == .Darwin {
-	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:CoreText.framework", "system:CoreFoundation.framework"}
+	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:CoreText.framework", "system:CoreFoundation.framework", "system:utf8proc"}
 } else {
-	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:fontconfig"}
+	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:fontconfig", "system:utf8proc"}
 }
 
 Node :: struct {data, tree: rawptr}
@@ -16,6 +16,8 @@ Read_Fn :: #type proc "c" (rawptr, [^]byte, c.size_t) -> c.size_t
 
 @(default_calling_convention="c")
 foreign rpc_lib {
+	nd_char_width :: proc(codepoint: i32, ambiguous_double: c.int) -> c.int ---
+	nd_grapheme_break :: proc(previous, current: i32, state: ^i32) -> c.int ---
 	nd_font_path :: proc(name: cstring) -> cstring ---
 	nd_reader_new :: proc(read: Read_Fn, user: rawptr) -> rawptr ---
 	nd_reader_parse :: proc(r: rawptr) -> c.int ---
@@ -38,6 +40,7 @@ foreign rpc_lib {
 	nd_map :: proc(w: rawptr, n: u32) ---
 	nd_map_end :: proc(w: rawptr) ---
 	nd_write_int :: proc(w: rawptr, n: i64) ---
+	nd_write_number :: proc(w: rawptr, n: f64) ---
 	nd_write_bool :: proc(w: rawptr, b: bool) ---
 	nd_write_nil :: proc(w: rawptr) ---
 	nd_write_str :: proc(w: rawptr, p: [^]byte, n: u32) ---
@@ -65,10 +68,11 @@ node_count :: proc(n: Node) -> int {
 node_at :: proc(n: Node, i: int) -> Node {return nd_at(n, u32(i))}
 put_string :: proc(w: rawptr, s: string) {nd_write_str(w, raw_data(s), u32(len(s)))}
 
-Value :: union {i64, bool, string, []Value, map[string]Value}
+Value :: union {i64, f64, bool, string, []Value, map[string]Value}
 put_value :: proc(w: rawptr, value: Value) {
 	switch v in value {
 	case i64: nd_write_int(w, v)
+	case f64: nd_write_number(w, v)
 	case bool: nd_write_bool(w, v)
 	case string: put_string(w, v)
 	case []Value:

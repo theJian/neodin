@@ -21,7 +21,7 @@ jobs:
           libgl1-mesa-dev libvulkan-dev fonts-dejavu-core
       - name: Install macOS libraries
         if: runner.os == 'macOS'
-        run: brew install cmake sdl3 sdl3_ttf
+        run: brew install cmake sdl3 sdl3_ttf utf8proc
       - name: Install pinned Odin and Neovim
         run: python tools/bootstrap.py --odin --nvim
       - name: Install pinned SDL SDKs

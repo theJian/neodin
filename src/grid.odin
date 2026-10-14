@@ -33,6 +33,7 @@ Window_Grid :: struct {
 	margins: [4]int,
 }
 UI :: struct {
+	widgets: Widgets,
 	grid: Grid,
 	grids: map[int]^Window_Grid,
 	highlights: map[int]Highlight,
@@ -46,11 +47,17 @@ UI :: struct {
 	busy, mouse, dirty, flushed, bell: bool,
 	title, guifont: string,
 	font_changed: bool,
+	ambiwidth_double: bool,
+	showtabline: int,
+	highlight_groups: map[string]int,
 }
 
 ui_init :: proc(ui: ^UI) {
 	ui.highlights = make(map[int]Highlight)
 	ui.grids = make(map[int]^Window_Grid)
+	ui.widgets.cmdlines = make(map[int]^Command_Line)
+	ui.highlight_groups = make(map[string]int)
+	ui.showtabline = 1
 	ui.cursor_grid = 1; ui.cursor_style_enabled = true
 	ui.foreground = 0xffffff; ui.background = 0x181818; ui.special = 0xffffff
 	ui.title = strings.clone("Neodin")
@@ -61,6 +68,8 @@ grid_destroy :: proc(g: ^Grid) {
 	delete(g.cells); g^ = {}
 }
 ui_destroy :: proc(ui: ^UI) {
+	widgets_destroy(&ui.widgets)
+	for name, _ in ui.highlight_groups {delete(name)}; delete(ui.highlight_groups)
 	grid_destroy(&ui.grid); delete(ui.highlights)
 	for _, g in ui.grids {grid_destroy(&g.grid); delete(g.anchor); free(g)}
 	delete(ui.grids)
@@ -223,6 +232,10 @@ highlight_parse :: proc(n: Node) -> Highlight {
 ui_highlight :: proc(ui: ^UI, id: int) -> Highlight {
 	h, ok := ui.highlights[id]
 	if !ok {h = {foreground = -1, background = -1, special = -1}}
+	return ui_resolve_highlight(ui, h)
+}
+ui_resolve_highlight :: proc(ui: ^UI, attrs: Highlight) -> Highlight {
+	h := attrs
 	if h.foreground < 0 {h.foreground = ui.foreground}
 	if h.background < 0 {h.background = ui.background}
 	if h.special < 0 {h.special = ui.special}
@@ -303,6 +316,10 @@ ui_event :: proc(ui: ^UI, name: string, a: Node) {
 		g := ui_grid(ui, node_int(node_at(a, 0)))
 		for i in 0..<4 {g.margins[i] = node_int(node_at(a, i+2))}
 	case "hl_attr_define": ui.highlights[node_int(node_at(a, 0))] = highlight_parse(node_at(a, 1))
+	case "hl_group_set":
+		group := node_string(node_at(a, 0))
+		if _, exists := ui.highlight_groups[group]; !exists {group = strings.clone(group)}
+		ui.highlight_groups[group] = node_int(node_at(a, 1))
 	case "default_colors_set":
 		ui.foreground = node_int(node_at(a, 0)); ui.background = node_int(node_at(a, 1)); ui.special = node_int(node_at(a, 2))
 		if ui.foreground < 0 {ui.foreground = 0xffffff}; if ui.background < 0 {ui.background = 0}; if ui.special < 0 {ui.special = ui.foreground}
@@ -326,11 +343,16 @@ ui_event :: proc(ui: ^UI, name: string, a: Node) {
 	case "bell", "visual_bell": ui.bell = true
 	case "set_title": delete(ui.title); ui.title = strings.clone(node_string(node_at(a, 0)))
 	case "option_set":
+		if node_string(node_at(a, 0)) == "showtabline" {ui.showtabline = node_int(node_at(a, 1))}
+		if node_string(node_at(a, 0)) == "ambiwidth" {ui.ambiwidth_double = node_string(node_at(a, 1)) == "double"}
 		if node_string(node_at(a, 0)) == "guifont" {
 			delete(ui.guifont); ui.guifont = strings.clone(node_string(node_at(a, 1))); ui.font_changed = true
 		}
-	case "flush": ui_compose(ui); ui.flushed = true; return
-	case: return
+	case "flush":
+		if ui.widgets.empty_pending && !ui.widgets.nonempty_seen {messages_clear(&ui.widgets.messages)}
+		ui.widgets.empty_pending = false; ui.widgets.nonempty_seen = false
+		ui_compose(ui); ui.flushed = true; return
+	case: if !widgets_event(ui, name, a) {return}
 	}
 	ui.dirty = true
 }

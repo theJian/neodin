@@ -33,17 +33,21 @@ App :: struct {
 	columns, rows: int,
 	mouse_button: u8,
 	smoke, smoke_sent: bool,
+	smoke_widgets: bool,
 	start: u64,
 	runtime_font: bool,
+	popup_bounds: [4]f64,
 }
 app_resize :: proc(app: ^App) {
 	columns, rows := display_size(&app.display)
 	if columns != app.columns || rows != app.rows {
 		app.columns = columns; app.rows = rows
 		if app.rpc.attached {_ = rpc_request(&app.rpc, "nvim_ui_try_resize", {i64(columns), i64(rows)})}
+		app.ui.flushed = false
 	}
 }
 app_event :: proc(app: ^App, event: ^sdl.Event) {
+	if widgets_input(app, event) {return}
 	r, d, ui := &app.rpc, &app.display, &app.ui
 	mod := sdl.GetModState()
 	#partial switch event.type {
@@ -149,6 +153,14 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 			app.ui.font_changed = false
 			app_guifont(&app)
 		}
+		if app.ui.flushed {
+			header := app.ui.showtabline == 2 || (app.ui.showtabline == 1 && len(app.ui.widgets.tabs) > 1)
+			if header != app.display.tab_header {
+				app.display.tab_header = header
+				app.display.grid_top = app.display.padding+(app.display.cell_height if header else 0)
+				app_resize(&app); app.ui.flushed = false
+			}
+		}
 		visible := cursor_visible(&app.display, &app.ui, config)
 		text_blink := sdl.GetTicks()/500
 		blink_changed := false
@@ -159,6 +171,7 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 			if app.ui.dirty {app.display.cursor_epoch = sdl.GetTicks()}
 			_ = sdl.SetWindowTitle(app.display.window, strings.clone_to_cstring(app.ui.title, context.temp_allocator))
 			display_draw(&app.display, &app.ui, config, app.preedit)
+			widgets_report_popup(&app)
 			app.ui.dirty = false; last_visible = visible; last_text_blink = text_blink
 		}
 		if app.ui.bell {app.ui.bell = false; _ = sdl.FlashWindow(app.display.window, .BRIEFLY)}
@@ -167,10 +180,16 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 				rpc_input(&app.rpc, "iNeodin GPU smoke test<CR>Unicode: 中文 日本語 😀 café é<CR>Editing, splits, terminal buffers, clipboard<Esc>")
 				app.smoke_sent = true
 			}
-			if sdl.GetTicks()-app.start > 1500 && app.smoke_sent && len(app.ui.grid.cells) > 0 && app.ui.grid.cells[0].text == "N" {
+			if !app.smoke_widgets && sdl.GetTicks()-app.start > 1500 && app.smoke_sent && len(app.ui.grid.cells) > 0 && app.ui.grid.cells[0].text == "N" {
 				app.display.capture_path = "build/smoke.png"
 				display_draw(&app.display, &app.ui, app.config, "")
-				fmt.println("GUI smoke test passed: embedded Neovim input, redraw, and GPU presentation")
+				rpc_lua(&app.rpc, "vim.cmd('tab split'); vim.api.nvim_echo({{'Neodin native messages: 中文','WarningMsg'}},true,{}); vim.api.nvim_input('i'); vim.defer_fn(function() vim.fn.complete(1, {{word='Neodin',kind='v',menu='Odin',info='Native completion details'}, {word='Neovim',kind='v',menu='0.12+'}}) end, 200)")
+				app.smoke_widgets = true
+			}
+			if app.smoke_widgets && sdl.GetTicks()-app.start > 2500 && app.ui.flushed && app.ui.widgets.popup.visible {
+				app.display.capture_path = "build/widgets.png"
+				display_draw(&app.display, &app.ui, app.config, "")
+				fmt.println("GUI smoke test passed: embedded Neovim, multigrid, native widgets, and GPU presentation")
 				return 0
 			}
 			if sdl.GetTicks()-app.start > 10000 {fmt.eprintln("GUI smoke test timed out"); return 1}

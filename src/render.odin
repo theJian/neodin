@@ -12,6 +12,9 @@ Text_Key :: struct {text: string, style: u8}
 Cached_Text :: struct {text: ^ttf.Text, width, height: f32}
 Display :: struct {
 	window: ^sdl.Window,
+	layout: Widget_Layout,
+	tab_header, external: bool,
+	grid_top: f32,
 	renderer: ^sdl.Renderer,
 	engine: ^ttf.TextEngine,
 	fonts: [4]^ttf.Font,
@@ -83,12 +86,14 @@ display_fonts :: proc(d: ^Display, config: Config, scale: f32) -> bool {
 	d.cell_height = d.glyph_height+f32(config.line_spacing)*scale
 	d.scale = scale; d.padding = f32(config.padding)*scale
 	d.density = max(sdl.GetWindowPixelDensity(d.window), 1)
+	d.grid_top = d.padding + (d.cell_height if d.tab_header else 0)
 	return true
 }
 display_create :: proc(d: ^Display, config: Config) -> bool {
 	if !sdl.Init({.VIDEO}) {fmt.eprintln(sdl.GetError()); return false}
 	if !ttf.Init() {fmt.eprintln(sdl.GetError()); return false}
 	d.text_cache = make(map[Text_Key]Cached_Text)
+	d.tab_header = !d.external
 	w := c.int(f32(config.columns)*config.font_size*0.65+f32(2*config.padding))
 	h := c.int(f32(config.rows)*config.font_size*1.4+f32(2*config.padding))
 	d.window = sdl.CreateWindow("Neodin", w, h, {.RESIZABLE, .HIGH_PIXEL_DENSITY})
@@ -109,14 +114,14 @@ display_create :: proc(d: ^Display, config: Config) -> bool {
 	if d.engine == nil {return false}
 	scale := max(sdl.GetWindowDisplayScale(d.window), 1)
 	if !display_fonts(d, config, scale) {return false}
-	_ = sdl.SetWindowSize(d.window, c.int((d.cell_width*f32(config.columns)+2*d.padding)/d.density), c.int((d.cell_height*f32(config.rows)+2*d.padding)/d.density))
+	_ = sdl.SetWindowSize(d.window, c.int((d.cell_width*f32(config.columns)+2*d.padding)/d.density), c.int((d.cell_height*f32(config.rows+chrome_rows(d))+2*d.padding)/d.density))
 	_ = sdl.SetWindowFullscreen(d.window, config.fullscreen)
 	_ = sdl.StartTextInput(d.window)
 	d.focused = true; d.cursor_epoch = sdl.GetTicks()
 	return true
 }
 display_destroy :: proc(d: ^Display) {
-	display_close_fonts(d); delete(d.text_cache); delete(d.fallbacks)
+	display_close_fonts(d); delete(d.text_cache); delete(d.fallbacks); delete(d.layout.tabs)
 	if d.engine != nil {ttf.DestroyRendererTextEngine(d.engine)}
 	if d.renderer != nil {sdl.DestroyRenderer(d.renderer)}
 	if d.window != nil {sdl.DestroyWindow(d.window)}
@@ -125,7 +130,7 @@ display_destroy :: proc(d: ^Display) {
 display_size :: proc(d: ^Display) -> (columns, rows: int) {
 	w, h: c.int
 	_ = sdl.GetRenderOutputSize(d.renderer, &w, &h)
-	return max(12, int((f32(w)-2*d.padding)/d.cell_width)), max(3, int((f32(h)-2*d.padding)/d.cell_height))
+	return max(12, int((f32(w)-2*d.padding)/d.cell_width)), max(3, int((f32(h)-2*d.padding)/d.cell_height)-chrome_rows(d))
 }
 set_color :: proc(d: ^Display, color: int) {
 	_ = sdl.SetRenderDrawColor(d.renderer, u8(color>>16), u8(color>>8), u8(color), 255)
@@ -180,7 +185,7 @@ highlight_text_visible :: proc(h: Highlight, ticks: u64) -> bool {
 }
 cursor_visible :: proc(d: ^Display, ui: ^UI, config: Config) -> bool {
 	if ui.busy {return false}
-	if !config.cursor_blink || !d.focused || len(ui.modes) == 0 {return true}
+	if !ui.cursor_style_enabled || !config.cursor_blink || !d.focused || len(ui.modes) == 0 {return true}
 	mode := ui.modes[clamp(ui.mode_index, 0, len(ui.modes)-1)]
 	if mode.blinkon <= 0 || mode.blinkoff <= 0 {return true}
 	elapsed := int(sdl.GetTicks()-d.cursor_epoch)
@@ -192,21 +197,21 @@ display_draw :: proc(d: ^Display, ui: ^UI, config: Config, preedit: string) {
 	g := &ui.grid
 	for y in 0..<g.height {for x in 0..<g.width {
 		cell := g.cells[y*g.width+x]; h := ui_cell_highlight(ui, cell)
-		rect := sdl.FRect{d.padding+f32(x)*d.cell_width, d.padding+f32(y)*d.cell_height, d.cell_width, d.cell_height}
+		rect := sdl.FRect{d.padding+f32(x)*d.cell_width, d.grid_top+f32(y)*d.cell_height, d.cell_width, d.cell_height}
 		fill_rect(d, h.background, rect)
 	}}
 	for y in 0..<g.height {for x in 0..<g.width {
 		cell := g.cells[y*g.width+x]; h := ui_cell_highlight(ui, cell)
-		rect := sdl.FRect{d.padding+f32(x)*d.cell_width, d.padding+f32(y)*d.cell_height, d.cell_width, d.cell_height}
+		rect := sdl.FRect{d.padding+f32(x)*d.cell_width, d.grid_top+f32(y)*d.cell_height, d.cell_width, d.cell_height}
 		if x+1 < g.width && g.cells[y*g.width+x+1].text == "" {rect.w *= 2}
 		draw_text(d, cell.text, h, rect); draw_decorations(d, h, rect)
 	}}
 	row, col := ui.cursor_row, ui.cursor_col
 	if row >= 0 && row < g.height && col >= 0 && col < g.width {
-		rect := sdl.FRect{d.padding+f32(col)*d.cell_width, d.padding+f32(row)*d.cell_height, d.cell_width, d.cell_height}
+		rect := sdl.FRect{d.padding+f32(col)*d.cell_width, d.grid_top+f32(row)*d.cell_height, d.cell_width, d.cell_height}
 		if col+1 < g.width && g.cells[row*g.width+col+1].text == "" {rect.w *= 2}
 		mode := Cursor_Mode{percentage = 100}
-		if len(ui.modes) > 0 {mode = ui.modes[clamp(ui.mode_index, 0, len(ui.modes)-1)]}
+		if ui.cursor_style_enabled && len(ui.modes) > 0 {mode = ui.modes[clamp(ui.mode_index, 0, len(ui.modes)-1)]}
 		if cursor_visible(d, ui, config) {
 			h := ui_highlight(ui, mode.attr_id)
 			if mode.attr_id == 0 {h.foreground, h.background = ui.background, ui.foreground}
@@ -220,13 +225,14 @@ display_draw :: proc(d: ^Display, ui: ^UI, config: Config, preedit: string) {
 				if mode.shape != "vertical" && mode.shape != "horizontal" {draw_text(d, g.cells[row*g.width+col].text, h, rect)}
 			}
 		}
-		if preedit != "" {
+		if preedit != "" && widgets_active_cmdline(&ui.widgets) == nil {
 			rect.w = d.cell_width*f32(max(len(preedit), 1)); h := ui_highlight(ui, 0); h.underline = true
 			fill_rect(d, h.background, rect); draw_text(d, preedit, h, rect); draw_decorations(d, h, rect)
 		}
 		area := sdl.Rect{c.int(rect.x/d.density), c.int(rect.y/d.density), c.int(rect.w/d.density), c.int(rect.h/d.density)}
 		_ = sdl.SetTextInputArea(d.window, &area, 0)
 	}
+	if !d.external {widgets_draw(d, ui, preedit)}
 	if d.capture_path != "" {
 		if surface := sdl.RenderReadPixels(d.renderer, nil); surface != nil {
 			_ = sdl.SavePNG(surface, strings.clone_to_cstring(d.capture_path, context.temp_allocator))
@@ -236,3 +242,5 @@ display_draw :: proc(d: ^Display, ui: ^UI, config: Config, preedit: string) {
 	}
 	_ = sdl.RenderPresent(d.renderer)
 }
+
+chrome_rows :: proc(d: ^Display) -> int {return 0 if d.external else (3 if d.tab_header else 2)}
