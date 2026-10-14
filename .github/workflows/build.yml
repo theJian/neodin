@@ -1,0 +1,40 @@
+name: Native builds and editor tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          cmake ninja-build libfontconfig1-dev libfreetype-dev
+          libharfbuzz-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev
+          libxi-dev libxfixes-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev
+          libgl1-mesa-dev libvulkan-dev fonts-dejavu-core
+      - name: Install macOS libraries
+        if: runner.os == 'macOS'
+        run: brew install cmake sdl3 sdl3_ttf
+      - name: Install pinned Odin and Neovim
+        run: python tools/bootstrap.py --odin --nvim
+      - name: Install pinned SDL SDKs
+        if: runner.os != 'macOS'
+        run: python tools/bootstrap.py --sdl
+      - name: Test protocol and editor behavior
+        run: python build.py test
+      - name: Build release executable
+        run: python build.py build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neodin-${{ runner.os }}
+          path: |
+            build/neodin
+            build/neodin.exe
+            build/*.dll
