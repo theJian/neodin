@@ -177,3 +177,15 @@ test_cancel_close_preserves_unsaved_buffer :: proc(t: ^testing.T) {
 	defer delete(result)
 	testing.expect(t, result == "unsaved work:true")
 }
+
+@(test)
+test_neovim_012_clipboard_configuration_is_preserved :: proc(t: ^testing.T) {
+	r: RPC; ui: UI
+	if !rpc_start(&r, "nvim", {"--clean", "-n", "--cmd", "lua vim.g.clipboard='osc52'"}) {testing.expect(t, false); return}
+	defer rpc_destroy(&r)
+	ui_init(&ui); defer ui_destroy(&ui)
+	rpc_attach(&r, 50, 12)
+	testing.expect(t, editor_wait(&r, &ui))
+	result := editor_eval(&r, &ui, "return vim.g.clipboard")
+	testing.expect(t, result == "osc52"); delete(result)
+}

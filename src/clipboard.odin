@@ -5,6 +5,8 @@ import sdl "vendor:sdl3"
 
 CLIPBOARD_SETUP :: `
 local channel = ...
+local configured = vim.g.clipboard
+if configured ~= nil and (type(configured) ~= 'table' or configured.name ~= 'Neodin') then return end
 vim.g.clipboard = {
   name = 'Neodin', cache_enabled = 0,
   copy = {
@@ -16,8 +18,10 @@ vim.g.clipboard = {
     ['*'] = function() return vim.rpcrequest(channel, 'neodin_clipboard_get') end,
   },
 }
-vim.g.loaded_clipboard_provider = nil
-vim.cmd('runtime autoload/provider/clipboard.vim')
+if vim.g.loaded_clipboard_provider ~= nil then
+  vim.g.loaded_clipboard_provider = nil
+  vim.cmd('runtime autoload/provider/clipboard.vim')
+end
 `
 Clipboard :: struct {text, regtype: string}
 clipboard_destroy :: proc(c: ^Clipboard) {delete(c.text); delete(c.regtype)}

@@ -3,11 +3,11 @@ package main
 import "core:c"
 
 when ODIN_OS == .Windows {
-	foreign import rpc_lib {"../build/neodin_rpc.lib", "system:Advapi32.lib", "system:utf8proc.lib"}
+	foreign import rpc_lib {"../build/neodin_rpc.lib", "system:Advapi32.lib", "system:utf8proc.lib", "system:uv.lib"}
 } else when ODIN_OS == .Darwin {
-	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:CoreText.framework", "system:CoreFoundation.framework", "system:utf8proc"}
+	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:CoreText.framework", "system:CoreFoundation.framework", "system:utf8proc", "system:uv"}
 } else {
-	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:fontconfig", "system:utf8proc"}
+	foreign import rpc_lib {"../build/libneodin_rpc.a", "system:fontconfig", "system:utf8proc", "system:uv"}
 }
 
 Node :: struct {data, tree: rawptr}
@@ -16,6 +16,11 @@ Read_Fn :: #type proc "c" (rawptr, [^]byte, c.size_t) -> c.size_t
 
 @(default_calling_convention="c")
 foreign rpc_lib {
+	nd_transport_connect :: proc(address: cstring) -> rawptr ---
+	nd_transport_free :: proc(transport: rawptr) ---
+	nd_transport_read :: proc(transport: rawptr, data: [^]byte, size: c.size_t) -> c.size_t ---
+	nd_transport_eof :: proc(transport: rawptr) -> c.int ---
+	nd_transport_write :: proc(transport: rawptr, data: [^]byte, size: c.size_t) -> c.int ---
 	nd_char_width :: proc(codepoint: i32, ambiguous_double: c.int) -> c.int ---
 	nd_grapheme_break :: proc(previous, current: i32, state: ^i32) -> c.int ---
 	nd_font_path :: proc(name: cstring) -> cstring ---

@@ -13,6 +13,7 @@ RPC :: struct {
 	process: os.Process,
 	input, output: ^os.File,
 	reader: rawptr,
+	transport: rawptr,
 	serial: i64,
 	pending: map[i64]Pending,
 	input_queue: [dynamic]Input_Job,
@@ -21,11 +22,13 @@ RPC :: struct {
 	channel: int,
 	ui_size: [2]int,
 	exited: bool,
+	spawned: bool,
 }
 
 pipe_read :: proc "c" (user: rawptr, data: [^]byte, size: c.size_t) -> c.size_t {
 	context = runtime.default_context()
 	r := (^RPC)(user)
+	if r.transport != nil {return nd_transport_read(r.transport, data, size)}
 	has_data, err := os.pipe_has_data(r.output)
 	if err != nil {return ~c.size_t(0)}
 	if !has_data {return 0}
@@ -56,22 +59,37 @@ rpc_start :: proc(r: ^RPC, executable: string, args: []string, guifont := "") ->
 		return false
 	}
 	r.process = p; r.input = stdin_w; r.output = stdout_r
+	r.spawned = true
 	r.pending = make(map[i64]Pending)
 	r.reader = nd_reader_new(pipe_read, r)
-	return r.reader != nil
+	if r.reader == nil {rpc_destroy(r); return false}
+	return true
 }
 
-rpc_destroy :: proc(r: ^RPC) {
+rpc_connect :: proc(r: ^RPC, address: string) -> bool {
+	r.transport = nd_transport_connect(strings.clone_to_cstring(address, context.temp_allocator))
+	if r.transport == nil {fmt.eprintf("Cannot connect to Neovim at %s\n", address); return false}
+	r.pending = make(map[i64]Pending)
+	r.reader = nd_reader_new(pipe_read, r)
+	if r.reader == nil {rpc_destroy(r); return false}
+	return true
+}
+
+rpc_destroy :: proc(r: ^RPC, terminate := true) {
 	// Closing stdin gives Neovim EOF; force termination only after a bounded wait.
-	os.close(r.input)
-	if !r.exited {
-		state, _ := os.process_wait(r.process, 250_000_000)
-		if !state.exited {_ = os.process_kill(r.process); _, _ = os.process_wait(r.process)}
+	if r.transport != nil {nd_transport_free(r.transport)}
+	else if r.spawned {
+		os.close(r.input)
+		if !r.exited {
+			state, _ := os.process_wait(r.process, 250_000_000)
+			if !state.exited && terminate {_ = os.process_kill(r.process); _, _ = os.process_wait(r.process)}
+		}
+		os.close(r.output)
 	}
-	os.close(r.output)
-	nd_reader_free(r.reader)
+	if r.reader != nil {nd_reader_free(r.reader)}
 	for job in r.input_queue {delete(job.text)}
 	delete(r.pending); delete(r.input_queue)
+	r^ = {}
 }
 
 rpc_send :: proc(r: ^RPC, w: rawptr) -> bool {
@@ -80,6 +98,10 @@ rpc_send :: proc(r: ^RPC, w: rawptr) -> bool {
 	err := nd_writer_finish(w, &data, &size)
 	defer nd_free(data)
 	if err != 0 {r.failed = true; return false}
+	if r.transport != nil {
+		if nd_transport_write(r.transport, data, size) == 0 {r.failed = true; return false}
+		return true
+	}
 	remaining := data[:int(size)]
 	for len(remaining) > 0 {
 		n, write_err := os.write(r.input, remaining)
@@ -207,6 +229,8 @@ neovim_version_supported :: proc(version: Neovim_Version) -> bool {
 	return version.major > 0 || (version.major == 0 && version.minor >= 12)
 }
 rpc_attach_ui :: proc(r: ^RPC) {
+	// --embed pauses user startup until attach, so init.lua can override this.
+	rpc_lua(r, CLIPBOARD_SETUP, {i64(r.channel)})
 	options := make(map[string]Value)
 	options["rgb"] = true
 	options["ext_linegrid"] = true

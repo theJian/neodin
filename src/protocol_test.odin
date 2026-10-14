@@ -123,13 +123,16 @@ test_version_gate_before_ui_attach :: proc(t: ^testing.T) {
 			testing.expect(t, len(r.pending) == 0 && r.channel == 0)
 			continue
 		}
-		buffer: [512]byte
+		buffer: [4096]byte
 		n, read_err := os.read(output, buffer[:])
 		testing.expect(t, read_err == nil)
 		request_stream := Test_Stream{data = buffer[:n], available = n, chunk = n}
 		request_reader := nd_reader_new(test_read, &request_stream); defer nd_reader_free(request_reader)
 		testing.expect(t, nd_reader_parse(request_reader) == 1)
 		request := nd_reader_root(request_reader)
+		testing.expect(t, node_string(node_at(request, 2)) == "nvim_exec_lua")
+		testing.expect(t, nd_reader_parse(request_reader) == 1)
+		request = nd_reader_root(request_reader)
 		testing.expect(t, node_string(node_at(request, 2)) == "nvim_ui_attach")
 		args := node_at(request, 3)
 		testing.expect(t, node_int(node_at(args, 0)) == 80 && node_int(node_at(args, 1)) == 24)

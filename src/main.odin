@@ -11,7 +11,7 @@ HELP :: `Neodin — a hardware accelerated Neovim GUI in Odin
 
 Requires Neovim 0.12 or newer.
 
-Usage: neodin [--config PATH] [--renderer NAME] [--] [Neovim arguments...]
+Usage: neodin [--config PATH] [--renderer NAME] [--server ADDRESS] [--] [Neovim arguments...]
        neodin --list-renderers
 
 Config: $NEODIN_CONFIG, $XDG_CONFIG_HOME/neodin/config.json, or
@@ -30,7 +30,6 @@ App :: struct {
 	config: Config,
 	clipboard: Clipboard,
 	preedit: string,
-	clipboard_ready: bool,
 	columns, rows: int,
 	mouse_button: u8,
 	primary_window: int,
@@ -142,7 +141,7 @@ app_message :: proc(app: ^App, message: Node) {
 		}
 	}
 }
-app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
+app_run :: proc(config: Config, nvim_args: []string, smoke: bool, server := "") -> int {
 	app := App{config = config, smoke = smoke}
 	ui_init(&app.ui); defer ui_destroy(&app.ui)
 	defer clipboard_destroy(&app.clipboard)
@@ -157,7 +156,9 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 	}
 	font := config.font
 	if font == "" {font = font_default_path()}
-	if !rpc_start(&app.rpc, config.nvim, nvim_args, fmt.tprintf("%s:h%v", font, config.font_size)) {return 1}
+	if server != "" {
+		if !rpc_connect(&app.rpc, server) {return 1}
+	} else if !rpc_start(&app.rpc, config.nvim, nvim_args, fmt.tprintf("%s:h%v", font, config.font_size)) {return 1}
 	defer rpc_destroy(&app.rpc)
 	app.columns, app.rows = display_size(&app.display)
 	rpc_attach(&app.rpc, app.columns, app.rows)
@@ -171,13 +172,19 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 			if nd_reader_parse(app.rpc.reader) == 0 {break}
 			app_message(&app, nd_reader_root(app.rpc.reader))
 		}
-		state, _ := os.process_wait(app.rpc.process, 0)
-		if state.exited {app.rpc.exited = true; return state.exit_code}
-		if app.rpc.failed || nd_reader_error(app.rpc.reader) != 0 {fmt.eprintln("Neovim RPC connection failed"); return 1}
-		if app.rpc.attached && app.rpc.channel != 0 && !app.clipboard_ready {
-			rpc_lua(&app.rpc, CLIPBOARD_SETUP, {i64(app.rpc.channel)})
-			app.clipboard_ready = true
+		exited, exit_code := false, 0
+		if app.rpc.transport == nil {
+			state, _ := os.process_wait(app.rpc.process, 0)
+			exited, exit_code = state.exited, state.exit_code
 		}
+		app.rpc.exited = exited
+		if app.ui.reconnect_address != "" && (!app.ui.restart || exited || nd_reader_error(app.rpc.reader) != 0) {
+			if !app_reconnect(&app) {return 1}
+			continue
+		}
+		if exited {return exit_code}
+		if app.rpc.transport != nil && nd_transport_eof(app.rpc.transport) != 0 && nd_reader_error(app.rpc.reader) != 0 {return 0}
+		if app.rpc.failed || nd_reader_error(app.rpc.reader) != 0 {fmt.eprintln("Neovim RPC connection failed"); return 1}
 		rpc_flush_input(&app.rpc)
 		if app.ui.font_changed {
 			app.ui.font_changed = false
@@ -278,6 +285,7 @@ main :: proc() {
 	path := config_path(); defer delete(path)
 	required := os.get_env("NEODIN_CONFIG", context.temp_allocator) != ""
 	renderer := ""
+	server := ""
 	nvim_args := make([dynamic]string); defer delete(nvim_args)
 	smoke := false
 	for i := 1; i < len(os.args); i += 1 {
@@ -289,10 +297,11 @@ main :: proc() {
 			for j in 0..<sdl.GetNumRenderDrivers() {fmt.println(sdl.GetRenderDriver(j))}
 			sdl.Quit(); return
 		}
-		if arg == "--config" || arg == "--renderer" {
+		if arg == "--config" || arg == "--renderer" || arg == "--server" {
 			if i+1 >= len(os.args) {fmt.eprintf("%s requires a value\n", arg); os.exit(2)}
 			i += 1
 			if arg == "--config" {delete(path); path = strings.clone(os.args[i]); required = true}
+			else if arg == "--server" {server = os.args[i]}
 			else {renderer = os.args[i]}
 		} else if arg == "--smoke-test" {smoke = true; append(&nvim_args, "--clean", "-n")}
 		else {append(&nvim_args, arg)}
@@ -300,6 +309,6 @@ main :: proc() {
 	if !config_load(path, required, &config) {os.exit(2)}
 	if renderer != "" {config.renderer = renderer}
 	if error := config_validate(config); error != "" {fmt.eprintln(error); os.exit(2)}
-	code := app_run(config, nvim_args[:], smoke)
+	code := app_run(config, nvim_args[:], smoke, server)
 	if code != 0 {os.exit(code)}
 }

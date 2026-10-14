@@ -17,6 +17,7 @@ ODIN = 'dev-2026-10'
 SDL = '3.4.18'
 TTF = '3.2.2'
 UTF8PROC = '2.11.3'
+LIBUV = '1.52.1'
 NVIM = 'v0.12.3'
 NVIM_HASHES = {
     'nvim-linux-x86_64.tar.gz': 'c441b547142860bf01bcce39e36cbed185c41112813e15443b16e5237750724d',
@@ -101,13 +102,21 @@ def sdl_dependencies():
             run('cmake', '--build', str(binary), '--parallel', '4')
             run('cmake', '--install', str(binary))
     else:
-        raise RuntimeError('On macOS install libraries with: brew install sdl3 sdl3_ttf utf8proc')
+        raise RuntimeError('On macOS install libraries with: brew install sdl3 sdl3_ttf utf8proc libuv')
     folder = fetch('JuliaStrings/utf8proc', f'v{UTF8PROC}', f'utf8proc-{UTF8PROC}.tar.gz', BUILD / 'sources',
                    url=f'https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v{UTF8PROC}.tar.gz')
     binary = BUILD / 'deps-build/utf8proc'
     run('cmake', '-S', str(folder / f'utf8proc-{UTF8PROC}'), '-B', str(binary),
         '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_INSTALL_PREFIX={prefix}',
         '-DCMAKE_INSTALL_LIBDIR=lib', '-DBUILD_SHARED_LIBS=ON', '-DUTF8PROC_ENABLE_TESTING=OFF')
+    run('cmake', '--build', str(binary), '--config', 'Release', '--parallel', '4')
+    run('cmake', '--install', str(binary), '--config', 'Release')
+    folder = fetch('libuv/libuv', f'v{LIBUV}', f'libuv-v{LIBUV}.tar.gz', BUILD / 'sources',
+                   url=f'https://dist.libuv.org/dist/v{LIBUV}/libuv-v{LIBUV}.tar.gz')
+    binary = BUILD / 'deps-build/libuv'
+    run('cmake', '-S', str(folder / f'libuv-v{LIBUV}'), '-B', str(binary),
+        '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_INSTALL_PREFIX={prefix}',
+        '-DCMAKE_INSTALL_LIBDIR=lib', '-DLIBUV_BUILD_SHARED=ON', '-DLIBUV_BUILD_TESTS=OFF')
     run('cmake', '--build', str(binary), '--config', 'Release', '--parallel', '4')
     run('cmake', '--install', str(binary), '--config', 'Release')
     print(f'SDL libraries installed in {prefix / "lib"}')

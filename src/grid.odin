@@ -46,6 +46,8 @@ UI :: struct {
 	mode_index: int,
 	busy, mouse, dirty, flushed, bell: bool,
 	title, guifont: string,
+	reconnect_address: string,
+	restart: bool,
 	font_changed: bool,
 	ambiwidth_double: bool,
 	showtabline: int,
@@ -74,7 +76,7 @@ ui_destroy :: proc(ui: ^UI) {
 	for _, g in ui.grids {grid_destroy(&g.grid); delete(g.anchor); free(g)}
 	delete(ui.grids)
 	for mode in ui.modes {delete(mode.shape)}
-	delete(ui.modes); delete(ui.title); delete(ui.guifont)
+	delete(ui.modes); delete(ui.title); delete(ui.guifont); delete(ui.reconnect_address)
 }
 grid_resize :: proc(g: ^Grid, width, height: int) {
 	if g.width == width && g.height == height {return}
@@ -343,6 +345,9 @@ ui_event :: proc(ui: ^UI, name: string, a: Node) {
 	case "mouse_off": ui.mouse = false
 	case "bell", "visual_bell": ui.bell = true
 	case "set_title": delete(ui.title); ui.title = strings.clone(node_string(node_at(a, 0)))
+	case "connect", "restart":
+		delete(ui.reconnect_address); ui.reconnect_address = strings.clone(node_string(node_at(a, 0)))
+		ui.restart = name == "restart"
 	case "option_set":
 		if node_string(node_at(a, 0)) == "showtabline" {ui.showtabline = node_int(node_at(a, 1))}
 		if node_string(node_at(a, 0)) == "ambiwidth" {ui.ambiwidth_double = node_string(node_at(a, 1)) == "double"}
