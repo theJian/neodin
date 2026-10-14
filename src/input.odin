@@ -61,6 +61,7 @@ mouse_input :: proc(r: ^RPC, d: ^Display, ui: ^UI, button, action: string, x, y:
 	if !ui.mouse || !r.attached {return}
 	row, col := mouse_position(d, ui, x, y)
 	grid, local_row, local_col := ui_hit_grid(ui, row, col)
+	if d.external {grid, local_row, local_col = d.grid_id, row, col}
 	modifiers := key_modifiers(mod, true)
 	if clicks > 1 {modifiers = fmt.tprintf("%s-%d", modifiers, min(clicks, 4))}
 	_ = rpc_request(r, "nvim_input_mouse", {button, action, modifiers, i64(grid), i64(local_row), i64(local_col)})

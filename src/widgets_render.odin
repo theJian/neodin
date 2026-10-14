@@ -55,6 +55,8 @@ widgets_draw :: proc(d: ^Display, ui: ^UI, preedit: string) {
 	width := f32(ui.grid.width)*d.cell_width
 	bottom := d.grid_top+f32(ui.grid.height)*d.cell_height
 	base := widget_highlight(ui, "MsgArea")
+	line := widgets_active_cmdline(w)
+	if !d.external {
 	footer := sdl.FRect{d.padding, bottom, width, 2*d.cell_height}
 	fill_rect(d, base.background, footer)
 	d.layout.cmdline = {d.padding, bottom+d.cell_height, width, d.cell_height}
@@ -106,7 +108,6 @@ widgets_draw :: proc(d: ^Display, ui: ^UI, preedit: string) {
 			_, _ = draw_rich(d, ui, lines[start+i], base, {d.padding, top+f32(i)*d.cell_height, width, d.cell_height})
 		}
 	}
-	line := widgets_active_cmdline(w)
 	if line != nil {
 		fill_rect(d, base.background, d.layout.cmdline)
 		prefix := strings.repeat(" ", max(line.indent, 0), context.temp_allocator)
@@ -137,8 +138,11 @@ widgets_draw :: proc(d: ^Display, ui: ^UI, preedit: string) {
 			}
 		}
 	}
+	}
 	popup := &w.popup
 	d.layout.popup_visible = popup.visible && len(popup.items) > 0
+	if d.external {d.layout.popup_visible = d.layout.popup_visible && popup.grid == d.grid_id}
+	else if g, ok := ui.grids[popup.grid]; ok && g.kind == .External {d.layout.popup_visible = false}
 	if !d.layout.popup_visible {return}
 	row, col := ui_grid_position(ui, popup.grid)
 	row += f64(popup.row)+1; col += f64(popup.col)

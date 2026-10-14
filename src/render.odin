@@ -14,6 +14,7 @@ Display :: struct {
 	window: ^sdl.Window,
 	layout: Widget_Layout,
 	tab_header, external: bool,
+	grid_id: int,
 	grid_top: f32,
 	renderer: ^sdl.Renderer,
 	engine: ^ttf.TextEngine,
@@ -90,8 +91,10 @@ display_fonts :: proc(d: ^Display, config: Config, scale: f32) -> bool {
 	return true
 }
 display_create :: proc(d: ^Display, config: Config) -> bool {
-	if !sdl.Init({.VIDEO}) {fmt.eprintln(sdl.GetError()); return false}
-	if !ttf.Init() {fmt.eprintln(sdl.GetError()); return false}
+	if !d.external {
+		if !sdl.Init({.VIDEO}) {fmt.eprintln(sdl.GetError()); return false}
+		if !ttf.Init() {fmt.eprintln(sdl.GetError()); return false}
+	}
 	d.text_cache = make(map[Text_Key]Cached_Text)
 	d.tab_header = !d.external
 	w := c.int(f32(config.columns)*config.font_size*0.65+f32(2*config.padding))
@@ -125,7 +128,7 @@ display_destroy :: proc(d: ^Display) {
 	if d.engine != nil {ttf.DestroyRendererTextEngine(d.engine)}
 	if d.renderer != nil {sdl.DestroyRenderer(d.renderer)}
 	if d.window != nil {sdl.DestroyWindow(d.window)}
-	ttf.Quit(); sdl.Quit()
+	if !d.external {ttf.Quit(); sdl.Quit()}
 }
 display_size :: proc(d: ^Display) -> (columns, rows: int) {
 	w, h: c.int
@@ -232,7 +235,7 @@ display_draw :: proc(d: ^Display, ui: ^UI, config: Config, preedit: string) {
 		area := sdl.Rect{c.int(rect.x/d.density), c.int(rect.y/d.density), c.int(rect.w/d.density), c.int(rect.h/d.density)}
 		_ = sdl.SetTextInputArea(d.window, &area, 0)
 	}
-	if !d.external {widgets_draw(d, ui, preedit)}
+	widgets_draw(d, ui, preedit)
 	if d.capture_path != "" {
 		if surface := sdl.RenderReadPixels(d.renderer, nil); surface != nil {
 			_ = sdl.SavePNG(surface, strings.clone_to_cstring(d.capture_path, context.temp_allocator))

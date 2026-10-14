@@ -26,14 +26,18 @@ App :: struct {
 	rpc: RPC,
 	ui: UI,
 	display: Display,
+	external_windows: map[int]^Display,
 	config: Config,
 	clipboard: Clipboard,
 	preedit: string,
 	clipboard_ready: bool,
 	columns, rows: int,
 	mouse_button: u8,
+	primary_window: int,
 	smoke, smoke_sent: bool,
 	smoke_widgets: bool,
+	smoke_external: bool,
+	smoke_focus: bool,
 	start: u64,
 	runtime_font: bool,
 	popup_bounds: [4]f64,
@@ -47,12 +51,23 @@ app_resize :: proc(app: ^App) {
 	}
 }
 app_event :: proc(app: ^App, event: ^sdl.Event) {
-	if widgets_input(app, event) {return}
 	r, d, ui := &app.rpc, &app.display, &app.ui
+	window := sdl.GetWindowFromEvent(event^)
+	for _, external in app.external_windows {if external.window == window {d = external; break}}
+	view := app.ui
+	if d.external {
+		g, ok := app.ui.grids[d.grid_id]
+		if !ok {return}
+		view.grid = g.grid; ui = &view
+	}
+	if widgets_input(app, event, d) {return}
 	mod := sdl.GetModState()
 	#partial switch event.type {
 	case .QUIT, .WINDOW_CLOSE_REQUESTED:
-		if r.attached {rpc_lua(r, QUIT_COMMAND)}
+		if r.attached {
+			if d.external {rpc_lua(r, "local win=...; vim.schedule(function() local ok,err=pcall(vim.api.nvim_win_close,win,false); if not ok then vim.api.nvim_echo({{err,'ErrorMsg'}},true,{}) end end)", {i64(app.ui.grids[d.grid_id].window)})}
+			else {rpc_lua(r, QUIT_COMMAND)}
+		}
 	case .KEY_DOWN:
 		if app.preedit != "" {return}
 		paste := event.key.key == sdl.K_V && event.key.mod&(sdl.KMOD_CTRL|sdl.KMOD_SHIFT) == (sdl.KMOD_CTRL|sdl.KMOD_SHIFT)
@@ -65,17 +80,27 @@ app_event :: proc(app: ^App, event: ^sdl.Event) {
 		rpc_input(r, text_input(string(event.text.text)))
 		delete(app.preedit); app.preedit = ""
 	case .TEXT_EDITING:
-		delete(app.preedit); app.preedit = strings.clone(string(event.edit.text)); ui.dirty = true
+		delete(app.preedit); app.preedit = strings.clone(string(event.edit.text)); app.ui.dirty = true
 	case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
-		app_resize(app); ui.dirty = true
+		app_resize_window(app, d); app.ui.dirty = true
 	case .WINDOW_DISPLAY_SCALE_CHANGED:
-		if display_fonts(d, app.config, max(sdl.GetWindowDisplayScale(d.window), 1)) {app_resize(app)}
-		ui.dirty = true
-	case .WINDOW_EXPOSED: ui.dirty = true
+		if display_fonts(d, app.config, max(sdl.GetWindowDisplayScale(d.window), 1)) {app_resize_window(app, d)}
+		app.ui.dirty = true
+	case .WINDOW_EXPOSED: app.ui.dirty = true
 	case .WINDOW_FOCUS_GAINED, .WINDOW_FOCUS_LOST:
-		d.focused = event.type == .WINDOW_FOCUS_GAINED; ui.dirty = true
+		d.focused = event.type == .WINDOW_FOCUS_GAINED; app.ui.dirty = true
 		if !d.focused {app.mouse_button = 0}
-		if r.attached {rpc_lua(r, "vim.api.nvim_exec_autocmds(..., {})", {"FocusGained" if d.focused else "FocusLost"})}
+		if r.attached {
+			if d.focused {
+				if d.external {
+					if g, exists := app.ui.grids[ui.cursor_grid]; exists && g.kind != .External && g.window > 0 {app.primary_window = g.window}
+					_ = rpc_request(r, "nvim_set_current_win", {i64(app.ui.grids[d.grid_id].window)})
+				} else if app.primary_window > 0 {
+					rpc_lua(r, "local win=...; if vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_current_win(win) end", {i64(app.primary_window)})
+				}
+			}
+			rpc_lua(r, "vim.api.nvim_exec_autocmds(..., {})", {"FocusGained" if d.focused else "FocusLost"})
+		}
 	case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP:
 		button := mouse_button_name(event.button.button)
 		if button != "" {
@@ -125,6 +150,11 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 	defer if app.runtime_font {delete(app.config.font)}
 	if !display_create(&app.display, config) {display_destroy(&app.display); return 1}
 	defer display_destroy(&app.display)
+	app.external_windows = make(map[int]^Display)
+	defer {
+		for _, d in app.external_windows {display_destroy(d); free(d)}
+		delete(app.external_windows)
+	}
 	font := config.font
 	if font == "" {font = font_default_path()}
 	if !rpc_start(&app.rpc, config.nvim, nvim_args, fmt.tprintf("%s:h%v", font, config.font_size)) {return 1}
@@ -154,6 +184,8 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 			app_guifont(&app)
 		}
 		if app.ui.flushed {
+			if g, exists := app.ui.grids[app.ui.cursor_grid]; exists && g.kind != .External && g.window > 0 {app.primary_window = g.window}
+			if !app_sync_windows(&app) {return 1}
 			header := app.ui.showtabline == 2 || (app.ui.showtabline == 1 && len(app.ui.widgets.tabs) > 1)
 			if header != app.display.tab_header {
 				app.display.tab_header = header
@@ -161,7 +193,9 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 				app_resize(&app); app.ui.flushed = false
 			}
 		}
-		visible := cursor_visible(&app.display, &app.ui, config)
+		active_display := &app.display
+		if d, exists := app.external_windows[app.ui.cursor_grid]; exists {active_display = d}
+		visible := cursor_visible(active_display, &app.ui, app.config)
 		text_blink := sdl.GetTicks()/500
 		blink_changed := false
 		if text_blink != last_text_blink {
@@ -171,6 +205,7 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 			if app.ui.dirty {app.display.cursor_epoch = sdl.GetTicks()}
 			_ = sdl.SetWindowTitle(app.display.window, strings.clone_to_cstring(app.ui.title, context.temp_allocator))
 			display_draw(&app.display, &app.ui, config, app.preedit)
+			app_draw_external(&app)
 			widgets_report_popup(&app)
 			app.ui.dirty = false; last_visible = visible; last_text_blink = text_blink
 		}
@@ -186,10 +221,22 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 				rpc_lua(&app.rpc, "vim.cmd('tab split'); vim.api.nvim_echo({{'Neodin native messages: 中文','WarningMsg'}},true,{}); vim.api.nvim_input('i'); vim.defer_fn(function() vim.fn.complete(1, {{word='Neodin',kind='v',menu='Odin',info='Native completion details'}, {word='Neovim',kind='v',menu='0.12+'}}) end, 200)")
 				app.smoke_widgets = true
 			}
-			if app.smoke_widgets && sdl.GetTicks()-app.start > 2500 && app.ui.flushed && app.ui.widgets.popup.visible {
+			if !app.smoke_external && app.smoke_widgets && sdl.GetTicks()-app.start > 2500 && app.ui.flushed && app.ui.widgets.popup.visible {
 				app.display.capture_path = "build/widgets.png"
 				display_draw(&app.display, &app.ui, app.config, "")
-				fmt.println("GUI smoke test passed: embedded Neovim, multigrid, native widgets, and GPU presentation")
+				rpc_input(&app.rpc, "<C-e><Esc>")
+				rpc_lua(&app.rpc, "vim.defer_fn(function() local b=vim.api.nvim_create_buf(false,true); vim.api.nvim_buf_set_lines(b,0,-1,false,{'External Neovim window','Unicode: 中文 😀'}); vim.api.nvim_open_win(b,true,{external=true,width=40,height=8}) end, 200)")
+				app.smoke_external = true
+			}
+			if !app.smoke_focus && app.smoke_external && sdl.GetTicks()-app.start > 3500 && app.ui.flushed && len(app.external_windows) > 0 {
+				for _, external in app.external_windows {external.capture_path = "build/external.png"}
+				app_draw_external(&app)
+				focus: sdl.Event
+				focus.type = .WINDOW_FOCUS_GAINED; focus.window.windowID = sdl.GetWindowID(app.display.window)
+				app_event(&app, &focus); app.smoke_focus = true
+			}
+			if app.smoke_focus && sdl.GetTicks()-app.start > 4000 && app.ui.flushed && app.ui.grids[app.ui.cursor_grid].kind != .External {
+				fmt.println("GUI smoke test passed: embedded Neovim, multigrid, native widgets, external windows, and GPU presentation")
 				return 0
 			}
 			if sdl.GetTicks()-app.start > 10000 {fmt.eprintln("GUI smoke test timed out"); return 1}

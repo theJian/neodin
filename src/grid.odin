@@ -175,6 +175,7 @@ ui_compose :: proc(ui: ^UI) {
 	row, col := ui_grid_position(ui, ui.cursor_grid)
 	ui.cursor_row = int(math.floor(row))+ui.cursor_local[0]
 	ui.cursor_col = int(math.floor(col))+ui.cursor_local[1]
+	if g, found := ui.grids[ui.cursor_grid]; found && g.kind == .External {ui.cursor_row, ui.cursor_col = -1, -1}
 }
 ui_cell_highlight :: proc(ui: ^UI, cell: Cell) -> Highlight {
 	h := ui_highlight(ui, cell.highlight)

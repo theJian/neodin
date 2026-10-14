@@ -63,3 +63,18 @@ test_multigrid_layers_cursor_and_hit_testing :: proc(t: ^testing.T) {
 	ui_apply(&ui, {[]Value{"grid_destroy", []Value{i64(3)}}, []Value{"flush", []Value{}}})
 	testing.expect(t, !(3 in ui.grids))
 }
+
+@(test)
+test_external_grid_does_not_draw_in_root :: proc(t: ^testing.T) {
+	ui: UI; ui_init(&ui); defer ui_destroy(&ui)
+	ui_apply(&ui, {
+		[]Value{"grid_resize", []Value{i64(1), i64(8), i64(4)}, []Value{i64(2), i64(4), i64(2)}},
+		[]Value{"grid_line", []Value{i64(2), i64(0), i64(0), []Value{[]Value{"e", i64(0)}}}},
+		[]Value{"win_external_pos", []Value{i64(2), i64(101)}},
+		[]Value{"grid_cursor_goto", []Value{i64(2), i64(0), i64(0)}},
+		[]Value{"flush", []Value{}},
+	})
+	testing.expect(t, ui.grids[2].kind == .External && ui.grids[2].window == 101)
+	testing.expect(t, ui.grid.cells[0].text == "" && ui.grids[2].grid.cells[0].text == "e")
+	testing.expect(t, ui.cursor_row == -1 && ui.cursor_col == -1)
+}

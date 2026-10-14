@@ -5,11 +5,12 @@ import sdl "vendor:sdl3"
 rect_contains :: proc(rect: sdl.FRect, x, y: f32) -> bool {
 	return rect.w > 0 && rect.h > 0 && x >= rect.x && y >= rect.y && x < rect.x+rect.w && y < rect.y+rect.h
 }
-widgets_input :: proc(app: ^App, event: ^sdl.Event) -> bool {
-	d, w := &app.display, &app.ui.widgets
+widgets_input :: proc(app: ^App, event: ^sdl.Event, display: ^Display = nil) -> bool {
+	d := display; if d == nil {d = &app.display}
+	w := &app.ui.widgets
 	#partial switch event.type {
 	case .KEY_DOWN:
-		if w.history_visible {
+		if w.history_visible && !d.external {
 			switch event.key.key {
 			case sdl.K_ESCAPE, sdl.K_RETURN, sdl.K_Q:
 				w.history_visible = false; app.ui.dirty = true; return true
@@ -34,10 +35,11 @@ widgets_input :: proc(app: ^App, event: ^sdl.Event) -> bool {
 				return true
 			}
 		}
+		if !d.external && (y < d.grid_top || y >= d.grid_top+f32(app.ui.grid.height)*d.cell_height) {return true}
 	case .MOUSE_BUTTON_UP:
 		if event.button.button == 1 {
 			x, y := event.button.x*d.density, event.button.y*d.density
-			if y < d.grid_top || y >= d.grid_top+f32(app.ui.grid.height)*d.cell_height ||
+			if (!d.external && (y < d.grid_top || y >= d.grid_top+f32(app.ui.grid.height)*d.cell_height)) ||
 				(d.layout.popup_visible && rect_contains(d.layout.popup, x, y)) {return true}
 		}
 	case .MOUSE_WHEEL:
@@ -61,6 +63,7 @@ widgets_input :: proc(app: ^App, event: ^sdl.Event) -> bool {
 }
 widgets_report_popup :: proc(app: ^App) {
 	d := &app.display
+	if external, ok := app.external_windows[app.ui.widgets.popup.grid]; ok {d = external}
 	if !d.layout.popup_visible {app.popup_bounds = {}; return}
 	rect := d.layout.popup
 	bounds := [4]f64{f64(rect.w/d.cell_width), f64(rect.h/d.cell_height), f64((rect.y-d.grid_top)/d.cell_height), f64((rect.x-d.padding)/d.cell_width)}
