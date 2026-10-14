@@ -37,7 +37,7 @@ pipe_read :: proc "c" (user: rawptr, data: [^]byte, size: c.size_t) -> c.size_t 
 	return c.size_t(n)
 }
 
-rpc_start :: proc(r: ^RPC, executable: string, args: []string, guifont := "") -> bool {
+rpc_start :: proc(r: ^RPC, executable: string, args: []string, guifont := "", linespace := 0, widefont := "") -> bool {
 	stdin_r, stdin_w, err := os.pipe()
 	if err != nil {fmt.eprintln("Neovim stdin:", err); return false}
 	defer os.close(stdin_r)
@@ -47,6 +47,11 @@ rpc_start :: proc(r: ^RPC, executable: string, args: []string, guifont := "") ->
 	command := make([dynamic]string)
 	defer delete(command)
 	append(&command, executable, "--embed", "--cmd", "let g:neodin = 1")
+	append(&command, "--cmd", fmt.tprintf("let &linespace = %d", linespace))
+	if widefont != "" {
+		escaped_wide, _ := strings.replace_all(widefont, "'", "''", context.temp_allocator)
+		append(&command, "--cmd", fmt.tprintf("let &guifontwide = '%s'", escaped_wide))
+	}
 	if guifont != "" {
 		escaped, _ := strings.replace_all(guifont, "'", "''", context.temp_allocator)
 		append(&command, "--cmd", fmt.tprintf("let &guifont = '%s'", escaped))

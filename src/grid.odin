@@ -10,6 +10,8 @@ Highlight :: struct {
 	reverse, bold, italic, underline, undercurl, strikethrough: bool,
 	underdouble, underdotted, underdashed: bool,
 	dim, blink, conceal, overline: bool,
+	altfont: bool,
+	url: string,
 	blend: int,
 }
 Cursor_Mode :: struct {
@@ -46,6 +48,9 @@ UI :: struct {
 	mode_index: int,
 	busy, mouse, dirty, flushed, bell: bool,
 	title, guifont: string,
+	guifontwide: string,
+	linespace: int,
+	mousehide, mousemoveevent, mousefocus: bool,
 	reconnect_address: string,
 	restart: bool,
 	font_changed: bool,
@@ -60,6 +65,7 @@ ui_init :: proc(ui: ^UI) {
 	ui.widgets.cmdlines = make(map[int]^Command_Line)
 	ui.highlight_groups = make(map[string]int)
 	ui.showtabline = 1
+	ui.mousehide = true; ui.linespace = -1
 	ui.cursor_grid = 1; ui.cursor_style_enabled = true
 	ui.foreground = 0xffffff; ui.background = 0x181818; ui.special = 0xffffff
 	ui.title = strings.clone("Neodin")
@@ -72,11 +78,12 @@ grid_destroy :: proc(g: ^Grid) {
 ui_destroy :: proc(ui: ^UI) {
 	widgets_destroy(&ui.widgets)
 	for name, _ in ui.highlight_groups {delete(name)}; delete(ui.highlight_groups)
-	grid_destroy(&ui.grid); delete(ui.highlights)
+	grid_destroy(&ui.grid)
+	for _, h in ui.highlights {delete(h.url)}; delete(ui.highlights)
 	for _, g in ui.grids {grid_destroy(&g.grid); delete(g.anchor); free(g)}
 	delete(ui.grids)
 	for mode in ui.modes {delete(mode.shape)}
-	delete(ui.modes); delete(ui.title); delete(ui.guifont); delete(ui.reconnect_address)
+	delete(ui.modes); delete(ui.title); delete(ui.guifont); delete(ui.guifontwide); delete(ui.reconnect_address)
 }
 grid_resize :: proc(g: ^Grid, width, height: int) {
 	if g.width == width && g.height == height {return}
@@ -230,6 +237,7 @@ highlight_parse :: proc(n: Node) -> Highlight {
 	h.underdotted = node_bool(nd_get(n, "underdotted")); h.underdashed = node_bool(nd_get(n, "underdashed"))
 	h.dim = node_bool(nd_get(n, "dim")); h.blink = node_bool(nd_get(n, "blink"))
 	h.conceal = node_bool(nd_get(n, "conceal")); h.overline = node_bool(nd_get(n, "overline"))
+	h.altfont = node_bool(nd_get(n, "altfont")); h.url = strings.clone(node_string(nd_get(n, "url")))
 	return h
 }
 ui_highlight :: proc(ui: ^UI, id: int) -> Highlight {
@@ -318,7 +326,9 @@ ui_event :: proc(ui: ^UI, name: string, a: Node) {
 	case "win_viewport_margins":
 		g := ui_grid(ui, node_int(node_at(a, 0)))
 		for i in 0..<4 {g.margins[i] = node_int(node_at(a, i+2))}
-	case "hl_attr_define": ui.highlights[node_int(node_at(a, 0))] = highlight_parse(node_at(a, 1))
+	case "hl_attr_define":
+		id := node_int(node_at(a, 0)); delete(ui.highlights[id].url)
+		ui.highlights[id] = highlight_parse(node_at(a, 1))
 	case "hl_group_set":
 		group := node_string(node_at(a, 0))
 		if _, exists := ui.highlight_groups[group]; !exists {group = strings.clone(group)}
@@ -349,6 +359,12 @@ ui_event :: proc(ui: ^UI, name: string, a: Node) {
 		delete(ui.reconnect_address); ui.reconnect_address = strings.clone(node_string(node_at(a, 0)))
 		ui.restart = name == "restart"
 	case "option_set":
+		option := node_string(node_at(a, 0))
+		if option == "mousehide" {ui.mousehide = node_bool(node_at(a, 1))}
+		if option == "mousemoveevent" {ui.mousemoveevent = node_bool(node_at(a, 1))}
+		if option == "mousefocus" {ui.mousefocus = node_bool(node_at(a, 1))}
+		if option == "linespace" {ui.linespace = node_int(node_at(a, 1)); ui.font_changed = true}
+		if option == "guifontwide" {delete(ui.guifontwide); ui.guifontwide = strings.clone(node_string(node_at(a, 1))); ui.font_changed = true}
 		if node_string(node_at(a, 0)) == "showtabline" {ui.showtabline = node_int(node_at(a, 1))}
 		if node_string(node_at(a, 0)) == "ambiwidth" {ui.ambiwidth_double = node_string(node_at(a, 1)) == "double"}
 		if node_string(node_at(a, 0)) == "guifont" {

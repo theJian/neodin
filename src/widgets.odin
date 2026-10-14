@@ -28,7 +28,7 @@ Widgets :: struct {
 }
 
 rich_destroy :: proc(text: ^Rich_Text) {
-	for chunk in text.chunks {delete(chunk.text)}
+	for chunk in text.chunks {delete(chunk.text); if chunk.direct {delete(chunk.attrs.url)}}
 	delete(text.chunks); text^ = {}
 }
 rich_parse :: proc(node: Node) -> Rich_Text {

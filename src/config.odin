@@ -8,6 +8,7 @@ import "core:strings"
 Config :: struct {
 	nvim: string,
 	font: string,
+	wide_font, alternate_font: string,
 	fallback_fonts: []string,
 	font_size: f32,
 	line_spacing: int,

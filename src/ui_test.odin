@@ -78,3 +78,18 @@ test_external_grid_does_not_draw_in_root :: proc(t: ^testing.T) {
 	testing.expect(t, ui.grid.cells[0].text == "" && ui.grids[2].grid.cells[0].text == "e")
 	testing.expect(t, ui.cursor_row == -1 && ui.cursor_col == -1)
 }
+
+@(test)
+test_gui_options_and_hyperlink_highlights :: proc(t: ^testing.T) {
+	ui: UI; ui_init(&ui); defer ui_destroy(&ui)
+	attrs := make(map[string]Value); defer delete(attrs)
+	attrs["url"] = "https://neovim.io/"; attrs["altfont"] = true
+	ui_apply(&ui, {
+		[]Value{"hl_attr_define", []Value{i64(7), attrs}},
+		[]Value{"option_set", []Value{"mousehide", false}, []Value{"mousemoveevent", true}, []Value{"mousefocus", true}, []Value{"guifontwide", "Menlo"}, []Value{"linespace", i64(3)}},
+		[]Value{"flush", []Value{}},
+	})
+	testing.expect(t, ui.highlights[7].url == "https://neovim.io/" && ui.highlights[7].altfont)
+	testing.expect(t, !ui.mousehide && ui.mousemoveevent && ui.mousefocus && ui.font_changed)
+	testing.expect(t, ui.guifontwide == "Menlo" && ui.linespace == 3)
+}

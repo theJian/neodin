@@ -18,7 +18,7 @@ Display :: struct {
 	grid_top: f32,
 	renderer: ^sdl.Renderer,
 	engine: ^ttf.TextEngine,
-	fonts: [4]^ttf.Font,
+	fonts: [12]^ttf.Font,
 	fallbacks: [dynamic]^ttf.Font,
 	text_cache: map[Text_Key]Cached_Text,
 	cell_width, cell_height, glyph_height, padding: f32,
@@ -57,8 +57,10 @@ display_fonts :: proc(d: ^Display, config: Config, scale: f32) -> bool {
 	if font == nil {fmt.eprintf("Cannot open font %s: %s\n", path, sdl.GetError()); return false}
 	display_close_fonts(d)
 	d.fonts[0] = font
-	for i in 1..<4 {
-		d.fonts[i] = ttf.CopyFont(font)
+	for i in 1..<12 {
+		family := config.wide_font if i >= 4 && i < 8 else (config.alternate_font if i >= 8 else "")
+		if family != "" && i%4 == 0 {d.fonts[i] = ttf.OpenFont(strings.clone_to_cstring(font_resolve(family), context.temp_allocator), config.font_size*scale)}
+		else {d.fonts[i] = ttf.CopyFont(d.fonts[(i/4)*4] if i%4 != 0 else font)}
 		if d.fonts[i] == nil {return false}
 		style: ttf.FontStyleFlags
 		if i&1 != 0 {style += {.BOLD}}
@@ -146,6 +148,8 @@ draw_text :: proc(d: ^Display, text: string, h: Highlight, rect: sdl.FRect) {
 	if text == "" || text == " " || !highlight_text_visible(h, sdl.GetTicks()) {return}
 	style := u8(0)
 	if h.bold {style |= 1}; if h.italic {style |= 2}
+	if h.altfont {style += 8}
+	else if rect.w >= d.cell_width*1.5 {style += 4}
 	key := Text_Key{text, style}
 	cached, ok := d.text_cache[key]
 	if !ok {

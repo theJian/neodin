@@ -2,6 +2,7 @@ package main
 
 import "core:testing"
 import "core:strings"
+import "core:time"
 
 @(test)
 test_native_cmdline_and_unicode :: proc(t: ^testing.T) {
@@ -67,4 +68,73 @@ test_neovim_012_external_widgets :: proc(t: ^testing.T) {
 	rpc_input(&r, "<C-e><Esc>")
 	testing.expect(t, editor_wait(&r, &ui))
 	testing.expect(t, !ui.widgets.popup.visible)
+}
+
+@(test)
+test_neovim_012_progress_and_floating_statusline :: proc(t: ^testing.T) {
+	r: RPC; ui: UI
+	if !rpc_start(&r, "nvim", {"--clean", "-n"}) {testing.expect(t, false); return}
+	defer rpc_destroy(&r)
+	ui_init(&ui); defer ui_destroy(&ui)
+	rpc_attach(&r, 60, 18)
+	testing.expect(t, editor_wait(&r, &ui))
+	rpc_lua(&r, "vim.api.nvim_echo({{'Starting'}},false,{kind='progress',source='neodin-test',id='build',title='Build',status='running',percent=10})")
+	testing.expect(t, editor_wait(&r, &ui))
+	rpc_lua(&r, "vim.api.nvim_echo({{'Finished'}},false,{kind='progress',source='neodin-test',id='build',title='Build',status='success',percent=100})")
+	testing.expect(t, editor_wait(&r, &ui))
+	count := 0
+	finished := false
+	deadline := time.tick_now()
+	for !finished && time.tick_since(deadline) < 5*time.Second {
+		editor_pump(&r, &ui); count = 0
+		for message in ui.widgets.messages {
+			if message.id == "s:build" {
+				count += 1
+				finished = strings.contains(rich_plain(message.content), "Finished") && !strings.contains(rich_plain(message.content), "Starting")
+			}
+		}
+		time.sleep(time.Millisecond)
+	}
+	testing.expect(t, finished)
+	testing.expect(t, count == 1)
+	rpc_lua(&r, "local b=vim.api.nvim_create_buf(false,true); vim.api.nvim_buf_set_lines(b,0,-1,false,{'Float text'}); local w=vim.api.nvim_open_win(b,true,{relative='editor',row=2,col=3,width=20,height=4,border='rounded'}); vim.wo[w].statusline='Floating status'; vim.wo[w].winblend=20; vim.o.laststatus=2")
+	testing.expect(t, editor_wait(&r, &ui))
+	found := false
+	for _, g in ui.grids {
+		if g.kind != .Float || !g.visible {continue}
+		b := strings.builder_make(context.temp_allocator)
+		for cell in g.grid.cells {strings.write_string(&b, cell.text)}
+		if strings.contains(strings.to_string(b), "Floating status") {found = true}
+	}
+	testing.expect(t, found)
+}
+
+@(test)
+test_neovim_012_core_ui2 :: proc(t: ^testing.T) {
+	r: RPC; ui: UI
+	if !rpc_start(&r, "nvim", {"--clean", "-n"}) {testing.expect(t, false); return}
+	defer rpc_destroy(&r)
+	ui_init(&ui); defer ui_destroy(&ui)
+	rpc_attach(&r, 60, 18)
+	testing.expect(t, editor_wait(&r, &ui))
+	result := editor_eval(&r, &ui, "require('vim._core.ui2').enable(); vim.api.nvim_echo({{'UI2 message'}},true,{}); return 'enabled'")
+	testing.expect(t, result == "enabled"); delete(result)
+	rpc_input(&r, ":echo 'ui2 command'")
+	testing.expect(t, editor_wait(&r, &ui))
+	found := false
+	start := time.tick_now()
+	for !found && time.tick_since(start) < 5*time.Second {
+		editor_pump(&r, &ui)
+		for _, g in ui.grids {
+			b := strings.builder_make(context.temp_allocator)
+			for cell in g.grid.cells {strings.write_string(&b, cell.text)}
+			if strings.contains(strings.to_string(b), "echo 'ui2 command'") {found = true}
+		}
+		time.sleep(time.Millisecond)
+	}
+	testing.expect(t, found)
+	rpc_input(&r, "<Esc>")
+	testing.expect(t, editor_wait(&r, &ui))
+	result = editor_eval(&r, &ui, "return tostring(type(vim.pack.add)=='function' and type(vim.snippet.expand)=='function')")
+	testing.expect(t, result == "true"); delete(result)
 }

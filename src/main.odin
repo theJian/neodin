@@ -39,6 +39,7 @@ App :: struct {
 	smoke_focus: bool,
 	start: u64,
 	runtime_font: bool,
+	runtime_wide_font: bool,
 	popup_bounds: [4]f64,
 }
 app_resize :: proc(app: ^App) {
@@ -68,6 +69,7 @@ app_event :: proc(app: ^App, event: ^sdl.Event) {
 			else {rpc_lua(r, QUIT_COMMAND)}
 		}
 	case .KEY_DOWN:
+		if ui.mousehide {_ = sdl.HideCursor()}
 		if app.preedit != "" {return}
 		paste := event.key.key == sdl.K_V && event.key.mod&(sdl.KMOD_CTRL|sdl.KMOD_SHIFT) == (sdl.KMOD_CTRL|sdl.KMOD_SHIFT)
 		when ODIN_OS == .Darwin {paste = paste || (event.key.key == sdl.K_V && event.key.mod&sdl.KMOD_GUI != {})}
@@ -101,6 +103,13 @@ app_event :: proc(app: ^App, event: ^sdl.Event) {
 			rpc_lua(r, "vim.api.nvim_exec_autocmds(..., {})", {"FocusGained" if d.focused else "FocusLost"})
 		}
 	case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP:
+		if event.type == .MOUSE_BUTTON_DOWN && event.button.button == 1 && mod&(sdl.KMOD_CTRL|sdl.KMOD_GUI) != {} {
+			row, col := mouse_position(d, ui, event.button.x, event.button.y)
+			if len(ui.grid.cells) > 0 {
+				url := ui_highlight(ui, ui.grid.cells[row*ui.grid.width+col].highlight).url
+				if url != "" {_ = sdl.OpenURL(strings.clone_to_cstring(url, context.temp_allocator)); return}
+			}
+		}
 		button := mouse_button_name(event.button.button)
 		if button != "" {
 			action := "press" if event.type == .MOUSE_BUTTON_DOWN else "release"
@@ -108,7 +117,17 @@ app_event :: proc(app: ^App, event: ^sdl.Event) {
 			app.mouse_button = event.button.button if action == "press" else 0
 		}
 	case .MOUSE_MOTION:
+		_ = sdl.ShowCursor()
 		if app.mouse_button != 0 {mouse_input(r, d, ui, mouse_button_name(app.mouse_button), "drag", event.motion.x, event.motion.y, mod)}
+		else if ui.mousemoveevent || ui.mousefocus {
+			mouse_input(r, d, ui, "move", "", event.motion.x, event.motion.y, mod)
+			if ui.mousefocus {
+				row, col := mouse_position(d, ui, event.motion.x, event.motion.y)
+				id, _, _ := ui_hit_grid(ui, row, col)
+				if d.external {id = d.grid_id}
+				if g, exists := app.ui.grids[id]; exists && g.window > 0 && id != ui.cursor_grid {_ = rpc_request(r, "nvim_set_current_win", {i64(g.window)})}
+			}
+		}
 	case .MOUSE_WHEEL:
 		wheel := event.wheel
 		x, y := wheel.integer_x, wheel.integer_y
@@ -147,6 +166,7 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool, server := "") 
 	defer clipboard_destroy(&app.clipboard)
 	defer delete(app.preedit)
 	defer if app.runtime_font {delete(app.config.font)}
+	defer if app.runtime_wide_font {delete(app.config.wide_font)}
 	if !display_create(&app.display, config) {display_destroy(&app.display); return 1}
 	defer display_destroy(&app.display)
 	app.external_windows = make(map[int]^Display)
@@ -158,7 +178,7 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool, server := "") 
 	if font == "" {font = font_default_path()}
 	if server != "" {
 		if !rpc_connect(&app.rpc, server) {return 1}
-	} else if !rpc_start(&app.rpc, config.nvim, nvim_args, fmt.tprintf("%s:h%v", font, config.font_size)) {return 1}
+	} else if !rpc_start(&app.rpc, config.nvim, nvim_args, fmt.tprintf("%s:h%v", font, config.font_size), config.line_spacing, config.wide_font) {return 1}
 	defer rpc_destroy(&app.rpc)
 	app.columns, app.rows = display_size(&app.display)
 	rpc_attach(&app.rpc, app.columns, app.rows)
@@ -252,32 +272,44 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool, server := "") 
 		mem.free_all(context.temp_allocator)
 	}
 }
-app_guifont :: proc(app: ^App) {
-	if app.ui.guifont == "" {return}
-	fonts := strings.split(app.ui.guifont, ",", context.temp_allocator)
-	next := app.config
-	next.font = ""
-	for font in fonts {
+guifont_resolve :: proc(value: string, size: f32) -> (path: string, points: f32) {
+	points = size
+	for font in strings.split(value, ",", context.temp_allocator) {
 		parts := strings.split(font, ":h", context.temp_allocator)
 		name := parts[0]
 		if !os.exists(name) {name, _ = strings.replace_all(name, "_", " ", context.temp_allocator)}
-		resolved := font_resolve(name)
-		if resolved == "" {continue}
-		next.font = resolved
+		path = font_resolve(name)
+		if path == "" {continue}
 		if len(parts) > 1 {
 			size_part := strings.split(parts[1], ":", context.temp_allocator)[0]
-			if size, ok := strconv.parse_f32(size_part); ok {next.font_size = size}
+			if parsed, ok := strconv.parse_f32(size_part); ok {points = parsed}
 		}
-		break
+		return
 	}
-	if next.font == "" {fmt.eprintf("No available font in guifont=%s\n", app.ui.guifont); return}
+	return
+}
+app_guifont :: proc(app: ^App) {
+	next := app.config
+	if app.ui.guifont != "" {
+		next.font, next.font_size = guifont_resolve(app.ui.guifont, next.font_size)
+		if next.font == "" {fmt.eprintf("No available font in guifont=%s\n", app.ui.guifont); return}
+	}
+	next.wide_font = ""
+	if app.ui.guifontwide != "" {
+		next.wide_font, _ = guifont_resolve(app.ui.guifontwide, next.font_size)
+		if next.wide_font == "" {fmt.eprintf("No available font in guifontwide=%s\n", app.ui.guifontwide); return}
+	}
+	if app.ui.linespace >= 0 {next.line_spacing = app.ui.linespace}
 	if config_validate(next) != "" {return}
 	if display_fonts(&app.display, next, app.display.scale) {
-		// The parsed font is temporary; keep an owned copy for later DPI changes.
+		font, wide := strings.clone(next.font), strings.clone(next.wide_font)
 		if app.runtime_font {delete(app.config.font)}
-		app.config.font = strings.clone(next.font); app.runtime_font = true
-		app.config.font_size = next.font_size
+		if app.runtime_wide_font {delete(app.config.wide_font)}
+		app.config.font = font; app.config.wide_font = wide
+		app.runtime_font = true; app.runtime_wide_font = true
+		app.config.font_size = next.font_size; app.config.line_spacing = next.line_spacing
 		app_resize(app)
+		for _, d in app.external_windows {if display_fonts(d, app.config, d.scale) {app_resize_window(app, d)}}
 	}
 }
 main :: proc() {

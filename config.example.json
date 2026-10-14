@@ -1,6 +1,8 @@
 {
   "nvim": "nvim",
   "font": "",
+  "wide_font": "",
+  "alternate_font": "",
   "fallback_fonts": [],
   "font_size": 16,
   "line_spacing": 2,
