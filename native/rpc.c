@@ -24,6 +24,15 @@ mpack_node_t nd_reader_root(reader *r) { return mpack_tree_root(&r->tree); }
 void nd_reader_free(reader *r) { mpack_tree_destroy(&r->tree); free(r); }
 int nd_kind(mpack_node_t n) { return mpack_node_type(n); }
 int64_t nd_int(mpack_node_t n) { return mpack_node_i64(n); }
+double nd_number(mpack_node_t n) { return mpack_node_double(n); }
+int64_t nd_handle(mpack_node_t n) {
+    if (mpack_node_type(n) != mpack_type_ext) return mpack_node_i64(n);
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, mpack_node_data(n), mpack_node_data_len(n));
+    int64_t value = mpack_expect_i64(&r);
+    if (mpack_reader_destroy(&r) != mpack_ok) mpack_tree_flag_error(n.tree, mpack_error_data);
+    return value;
+}
 bool nd_bool(mpack_node_t n) { return mpack_node_bool(n); }
 const char *nd_str(mpack_node_t n) { return mpack_node_str(n); }
 uint32_t nd_strlen(mpack_node_t n) { return mpack_node_strlen(n); }
@@ -40,6 +49,7 @@ void nd_array_end(writer *w) { mpack_finish_array(&w->writer); }
 void nd_map(writer *w, uint32_t n) { mpack_start_map(&w->writer, n); }
 void nd_map_end(writer *w) { mpack_finish_map(&w->writer); }
 void nd_write_int(writer *w, int64_t n) { mpack_write_i64(&w->writer, n); }
+void nd_write_number(writer *w, double n) { mpack_write_double(&w->writer, n); }
 void nd_write_bool(writer *w, bool b) { mpack_write_bool(&w->writer, b); }
 void nd_write_nil(writer *w) { mpack_write_nil(&w->writer); }
 void nd_write_str(writer *w, const char *p, uint32_t n) { mpack_write_str(&w->writer, p, n); }

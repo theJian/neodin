@@ -2,3 +2,4 @@
 /research/
 *.dSYM/
 __pycache__/
+*.log

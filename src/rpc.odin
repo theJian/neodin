@@ -6,23 +6,28 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 
-Pending_Kind :: enum {General, Attach, Input, Api_Info}
-Pending :: struct {kind: Pending_Kind, method: string, input: string}
+Pending_Kind :: enum {General, Attach, Input, Api_Info, Paste}
+Pending :: struct {kind: Pending_Kind, method: string, bytes: int}
+Input_Job :: struct {kind: Pending_Kind, text: string, offset: int}
 RPC :: struct {
-	process: os.Process,
 	input, output: ^os.File,
 	reader: rawptr,
+	transport: rawptr,
 	serial: i64,
 	pending: map[i64]Pending,
-	input_queue: [dynamic]byte,
+	input_queue: [dynamic]Input_Job,
 	input_inflight: bool,
 	attached, failed: bool,
 	channel: int,
+	ui_size: [2]int,
+	exited: bool,
+	spawned, stdin_forwarded: bool,
 }
 
 pipe_read :: proc "c" (user: rawptr, data: [^]byte, size: c.size_t) -> c.size_t {
 	context = runtime.default_context()
 	r := (^RPC)(user)
+	if r.transport != nil {return nd_transport_read(r.transport, data, size)}
 	has_data, err := os.pipe_has_data(r.output)
 	if err != nil {return ~c.size_t(0)}
 	if !has_data {return 0}
@@ -31,38 +36,65 @@ pipe_read :: proc "c" (user: rawptr, data: [^]byte, size: c.size_t) -> c.size_t 
 	return c.size_t(n)
 }
 
-rpc_start :: proc(r: ^RPC, executable: string, args: []string) -> bool {
-	stdin_r, stdin_w, err := os.pipe()
-	if err != nil {fmt.eprintln("Neovim stdin:", err); return false}
-	defer os.close(stdin_r)
-	stdout_r, stdout_w, out_err := os.pipe()
-	if out_err != nil {os.close(stdin_w); return false}
-	defer os.close(stdout_w)
+rpc_start :: proc(r: ^RPC, executable: string, args: []string, guifont := "", linespace := 0, widefont := "") -> bool {
 	command := make([dynamic]string)
 	defer delete(command)
 	append(&command, executable, "--embed", "--cmd", "let g:neodin = 1")
-	append(&command, ..args)
-	p, start_err := os.process_start({command = command[:], stdin = stdin_r, stdout = stdout_w, stderr = os.stderr})
-	if start_err != nil {
-		os.close(stdin_w); os.close(stdout_r)
-		fmt.eprintln("Cannot start Neovim:", start_err)
-		return false
+	append(&command, "--cmd", fmt.tprintf("let &linespace = %d", linespace))
+	if widefont != "" {
+		escaped_wide, _ := strings.replace_all(widefont, "'", "''", context.temp_allocator)
+		append(&command, "--cmd", fmt.tprintf("let &guifontwide = '%s'", escaped_wide))
 	}
-	r.process = p; r.input = stdin_w; r.output = stdout_r
+	if guifont != "" {
+		escaped, _ := strings.replace_all(guifont, "'", "''", context.temp_allocator)
+		append(&command, "--cmd", fmt.tprintf("let &guifont = '%s'", escaped))
+	}
+	r.stdin_forwarded = nvim_reads_stdin(args)
+	append(&command, ..args)
+	argv := make([]cstring, len(command)+1, context.temp_allocator)
+	for arg, i in command {argv[i] = strings.clone_to_cstring(arg, context.temp_allocator)}
+	r.transport = nd_transport_spawn(raw_data(argv), c.int(1 if r.stdin_forwarded else 0))
+	if r.transport == nil {fmt.eprintf("Cannot start Neovim: %s\n", executable); return false}
+	r.spawned = true
 	r.pending = make(map[i64]Pending)
 	r.reader = nd_reader_new(pipe_read, r)
-	return r.reader != nil
+	if r.reader == nil {rpc_destroy(r); return false}
+	return true
 }
 
-rpc_destroy :: proc(r: ^RPC) {
+nvim_reads_stdin :: proc(args: []string) -> bool {
+	value, files_only := false, false
+	for arg in args {
+		if value {value = false; continue}
+		if arg == "-" {return true}
+		if files_only {continue}
+		if arg == "--" {files_only = true; continue}
+		switch arg {
+		case "-c", "--cmd", "-u", "-i", "-s", "-S", "-l", "-t", "-q", "-w", "-W", "--listen", "--server", "--remote-send", "--remote-expr": value = true
+		}
+	}
+	return false
+}
+
+rpc_connect :: proc(r: ^RPC, address: string) -> bool {
+	r.transport = nd_transport_connect(strings.clone_to_cstring(address, context.temp_allocator))
+	if r.transport == nil {fmt.eprintf("Cannot connect to Neovim at %s\n", address); return false}
+	r.pending = make(map[i64]Pending)
+	r.reader = nd_reader_new(pipe_read, r)
+	if r.reader == nil {rpc_destroy(r); return false}
+	return true
+}
+
+rpc_destroy :: proc(r: ^RPC, terminate := true) {
 	// Closing stdin gives Neovim EOF; force termination only after a bounded wait.
-	os.close(r.input)
-	state, _ := os.process_wait(r.process, 250_000_000)
-	if !state.exited {_ = os.process_kill(r.process); _, _ = os.process_wait(r.process)}
-	os.close(r.output)
-	nd_reader_free(r.reader)
-	for _, p in r.pending {delete(p.input)}
+	if r.transport != nil {
+		nd_transport_stop(r.transport, c.int(1 if terminate else 0))
+		nd_transport_free(r.transport)
+	} else {os.close(r.input); os.close(r.output)}
+	if r.reader != nil {nd_reader_free(r.reader)}
+	for job in r.input_queue {delete(job.text)}
 	delete(r.pending); delete(r.input_queue)
+	r^ = {}
 }
 
 rpc_send :: proc(r: ^RPC, w: rawptr) -> bool {
@@ -71,6 +103,10 @@ rpc_send :: proc(r: ^RPC, w: rawptr) -> bool {
 	err := nd_writer_finish(w, &data, &size)
 	defer nd_free(data)
 	if err != 0 {r.failed = true; return false}
+	if r.transport != nil {
+		if nd_transport_write(r.transport, data, size) == 0 {r.failed = true; return false}
+		return true
+	}
 	remaining := data[:int(size)]
 	for len(remaining) > 0 {
 		n, write_err := os.write(r.input, remaining)
@@ -80,24 +116,41 @@ rpc_send :: proc(r: ^RPC, w: rawptr) -> bool {
 	return true
 }
 
-rpc_request :: proc(r: ^RPC, method: string, args: []Value, kind := Pending_Kind.General, input := "") -> i64 {
+rpc_request :: proc(r: ^RPC, method: string, args: []Value, kind := Pending_Kind.General, bytes := 0) -> i64 {
 	r.serial += 1
 	w := nd_writer_new()
 	nd_array(w, 4); nd_write_int(w, 0); nd_write_int(w, r.serial)
 	put_string(w, method); put_value(w, Value(args)); nd_array_end(w)
-	r.pending[r.serial] = {kind, method, strings.clone(input)}
+	r.pending[r.serial] = {kind, method, bytes}
 	_ = rpc_send(r, w)
 	return r.serial
 }
 
-rpc_input :: proc(r: ^RPC, text: string) {append(&r.input_queue, ..transmute([]byte)text)}
+rpc_input :: proc(r: ^RPC, text: string) {
+	if text != "" {append(&r.input_queue, Input_Job{.Input, strings.clone(text), 0})}
+}
+rpc_paste :: proc(r: ^RPC, text: string) {
+	if text != "" {append(&r.input_queue, Input_Job{.Paste, strings.clone(text), 0})}
+}
+rpc_pop_input :: proc(r: ^RPC) {
+	delete(r.input_queue[0].text)
+	copy(r.input_queue[:], r.input_queue[1:]); resize(&r.input_queue, len(r.input_queue)-1)
+}
 rpc_flush_input :: proc(r: ^RPC) {
 	if !r.attached || r.input_inflight || len(r.input_queue) == 0 {return}
-	// One in flight keeps partial nvim_input acceptance in order under load.
-	n := min(len(r.input_queue), 1024)
-	s := string(r.input_queue[:n])
-	_ = rpc_request(r, "nvim_input", {s}, .Input, s)
-	copy(r.input_queue[:], r.input_queue[n:]); resize(&r.input_queue, len(r.input_queue)-n)
+	job := &r.input_queue[0]
+	remaining := job.text[job.offset:]
+	if job.kind == .Input {
+		n := input_chunk(transmute([]byte)remaining)
+		_ = rpc_request(r, "nvim_input", {remaining[:n]}, .Input, n)
+	} else {
+		n := min(len(remaining), 4096)
+		for n < len(remaining) && remaining[n]&0xc0 == 0x80 {n -= 1}
+		phase := i64(2)
+		if job.offset == 0 {phase = 1}
+		if n == len(remaining) {phase = -1 if job.offset == 0 else 3}
+		_ = rpc_request(r, "nvim_paste", {remaining[:n], true, phase}, .Paste, n)
+	}
 	r.input_inflight = true
 }
 
@@ -106,39 +159,101 @@ rpc_response :: proc(r: ^RPC, message: Node) {
 	p, ok := r.pending[id]
 	if !ok {return}
 	delete_key(&r.pending, id)
-	defer delete(p.input)
 	error := node_at(message, 2)
 	if nd_kind(error) != .Nil {
 		fmt.eprintf("Neovim %s failed: %s\n", p.method, node_string(node_at(error, 1)))
 		if p.kind == .Attach || p.kind == .Api_Info {r.failed = true}
-		if p.kind == .Input {r.input_inflight = false}
+		if p.kind == .Input || p.kind == .Paste {r.input_inflight = false; rpc_pop_input(r)}
 		return
 	}
 	result := node_at(message, 3)
 	switch p.kind {
 	case .Attach: r.attached = true
-	case .Api_Info: r.channel = node_int(node_at(result, 0))
-	case .Input:
-		r.input_inflight = false
-		n := clamp(node_int(result), 0, len(p.input))
-		if n < len(p.input) {
-			tail := strings.concatenate({p.input[n:], string(r.input_queue[:])})
-			defer delete(tail)
-			clear(&r.input_queue); append(&r.input_queue, ..transmute([]byte)tail)
+	case .Api_Info:
+		version, valid := neovim_version(result)
+		if !valid {
+			fmt.eprintln("Cannot read Neovim version from API metadata")
+			r.failed = true; return
 		}
+		if !neovim_version_supported(version) {
+			fmt.eprintf("Neodin requires Neovim 0.12 or newer (found %d.%d.%d)\n", version.major, version.minor, version.patch)
+			r.failed = true; return
+		}
+		r.channel = node_int(node_at(result, 0))
+		rpc_attach_ui(r)
+	case .Input, .Paste:
+		r.input_inflight = false
+		job := &r.input_queue[0]
+		if p.kind == .Input {job.offset += clamp(node_int(result), 0, p.bytes)}
+		else if node_bool(result) {job.offset += p.bytes}
+		else {job.offset = len(job.text)}
+		if job.offset >= len(job.text) {rpc_pop_input(r)}
 	case .General:
 	}
 }
 
+input_chunk :: proc(bytes: []byte) -> int {
+	n := min(len(bytes), 1024)
+	if n == len(bytes) {return n}
+	for n > 0 && bytes[n]&0xc0 == 0x80 {n -= 1}
+	// Do not split a <C-...> token, including the escaped literal <LT>.
+	for i := n-1; i >= 0; i -= 1 {
+		if bytes[i] == '>' {break}
+		if bytes[i] == '<' {n = i; break}
+	}
+	return n if n > 0 else min(len(bytes), 1024)
+}
 rpc_lua :: proc(r: ^RPC, code: string, args: []Value = nil) {
 	_ = rpc_request(r, "nvim_exec_lua", {code, Value(args)})
 }
 
 rpc_attach :: proc(r: ^RPC, columns, rows: int) {
+	r.ui_size = {columns, rows}
 	_ = rpc_request(r, "nvim_get_api_info", nil, .Api_Info)
+}
+
+Neovim_Version :: struct {major, minor, patch: int}
+neovim_version :: proc(api_info: Node) -> (version: Neovim_Version, valid: bool) {
+	if node_count(api_info) < 2 {return}
+	metadata := node_at(api_info, 1)
+	if nd_kind(metadata) != .Map {return}
+	n := nd_get(metadata, "version")
+	if nd_kind(n) != .Map {return}
+	fields := []struct {key: cstring, value: ^int}{
+		{"major", &version.major}, {"minor", &version.minor}, {"patch", &version.patch},
+	}
+	for field in fields {
+		value := nd_get(n, field.key)
+		if nd_kind(value) != .Int && nd_kind(value) != .Uint {return}
+		field.value^ = node_int(value)
+		if field.value^ < 0 {return}
+	}
+	return version, true
+}
+neovim_version_supported :: proc(version: Neovim_Version) -> bool {
+	return version.major > 0 || (version.major == 0 && version.minor >= 12)
+}
+rpc_attach_ui :: proc(r: ^RPC) {
+	// --embed pauses user startup until attach, so init.lua can override this.
+	rpc_lua(r, CLIPBOARD_SETUP, {i64(r.channel)})
 	options := make(map[string]Value)
+	if r.stdin_forwarded {options["stdin_fd"] = i64(3)}
 	options["rgb"] = true
 	options["ext_linegrid"] = true
+	options["ext_multigrid"] = true
+	options["ext_hlstate"] = true
+	options["ext_cmdline"] = true
+	options["ext_popupmenu"] = true
+	options["ext_tabline"] = true
+	options["ext_messages"] = true
 	defer delete(options)
-	_ = rpc_request(r, "nvim_ui_attach", {i64(columns), i64(rows), options}, .Attach)
+	_ = rpc_request(r, "nvim_ui_attach", {i64(r.ui_size[0]), i64(r.ui_size[1]), options}, .Attach)
+}
+
+rpc_poll_exit :: proc(r: ^RPC) -> (exited: bool, exit_code: int) {
+	if !r.spawned || r.transport == nil {return}
+	code: c.int
+	exited = nd_transport_exited(r.transport, &code) != 0
+	exit_code = int(code)
+	return
 }

@@ -8,6 +8,7 @@ import "core:strings"
 Config :: struct {
 	nvim: string,
 	font: string,
+	wide_font, alternate_font: string,
 	fallback_fonts: []string,
 	font_size: f32,
 	line_spacing: int,
@@ -15,11 +16,11 @@ Config :: struct {
 	padding: int,
 	renderer: string,
 	vsync, fullscreen, cursor_blink, option_as_alt: bool,
-	background_opacity: f32,
+	window_opacity: f32,
 }
 config_default :: proc() -> Config {
 	return {nvim = "nvim", font_size = 16, columns = 100, rows = 32, padding = 4,
-		renderer = "auto", vsync = true, cursor_blink = true, background_opacity = 1}
+		renderer = "auto", vsync = true, cursor_blink = true, window_opacity = 1}
 }
 config_path :: proc() -> string {
 	explicit := os.get_env("NEODIN_CONFIG", context.allocator); defer delete(explicit)
@@ -39,7 +40,7 @@ config_validate :: proc(c: Config) -> string {
 	if c.font_size < 6 || c.font_size > 96 {return "font_size must be between 6 and 96"}
 	if c.columns < 12 || c.columns > 1000 || c.rows < 3 || c.rows > 1000 {return "columns must be 12..1000 and rows 3..1000"}
 	if c.padding < 0 || c.padding > 100 || c.line_spacing < 0 || c.line_spacing > 100 {return "padding and line_spacing must be 0..100"}
-	if c.background_opacity < 0.1 || c.background_opacity > 1 {return "background_opacity must be 0.1..1"}
+	if c.window_opacity < 0.1 || c.window_opacity > 1 {return "window_opacity must be 0.1..1"}
 	if c.renderer == "" || c.renderer == "software" {return "renderer must be auto or a hardware backend"}
 	return ""
 }
