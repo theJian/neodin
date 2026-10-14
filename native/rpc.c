@@ -24,6 +24,15 @@ mpack_node_t nd_reader_root(reader *r) { return mpack_tree_root(&r->tree); }
 void nd_reader_free(reader *r) { mpack_tree_destroy(&r->tree); free(r); }
 int nd_kind(mpack_node_t n) { return mpack_node_type(n); }
 int64_t nd_int(mpack_node_t n) { return mpack_node_i64(n); }
+double nd_number(mpack_node_t n) { return mpack_node_double(n); }
+int64_t nd_handle(mpack_node_t n) {
+    if (mpack_node_type(n) != mpack_type_ext) return mpack_node_i64(n);
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, mpack_node_data(n), mpack_node_data_len(n));
+    int64_t value = mpack_expect_i64(&r);
+    if (mpack_reader_destroy(&r) != mpack_ok) mpack_tree_flag_error(n.tree, mpack_error_data);
+    return value;
+}
 bool nd_bool(mpack_node_t n) { return mpack_node_bool(n); }
 const char *nd_str(mpack_node_t n) { return mpack_node_str(n); }
 uint32_t nd_strlen(mpack_node_t n) { return mpack_node_strlen(n); }

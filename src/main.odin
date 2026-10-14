@@ -9,6 +9,8 @@ import sdl "vendor:sdl3"
 
 HELP :: `Neodin — a hardware accelerated Neovim GUI in Odin
 
+Requires Neovim 0.12 or newer.
+
 Usage: neodin [--config PATH] [--renderer NAME] [--] [Neovim arguments...]
        neodin --list-renderers
 
@@ -127,6 +129,7 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 	rpc_attach(&app.rpc, app.columns, app.rows)
 	app.start = sdl.GetTicks()
 	last_visible := true
+	last_text_blink := u64(0)
 	for {
 		event: sdl.Event
 		for sdl.PollEvent(&event) {app_event(&app, &event)}
@@ -147,11 +150,16 @@ app_run :: proc(config: Config, nvim_args: []string, smoke: bool) -> int {
 			app_guifont(&app)
 		}
 		visible := cursor_visible(&app.display, &app.ui, config)
-		if app.ui.flushed && (app.ui.dirty || visible != last_visible) {
+		text_blink := sdl.GetTicks()/500
+		blink_changed := false
+		if text_blink != last_text_blink {
+			for cell in app.ui.grid.cells {if ui_highlight(&app.ui, cell.highlight).blink {blink_changed = true; break}}
+		}
+		if app.ui.flushed && (app.ui.dirty || visible != last_visible || blink_changed) {
 			if app.ui.dirty {app.display.cursor_epoch = sdl.GetTicks()}
 			_ = sdl.SetWindowTitle(app.display.window, strings.clone_to_cstring(app.ui.title, context.temp_allocator))
 			display_draw(&app.display, &app.ui, config, app.preedit)
-			app.ui.dirty = false; last_visible = visible
+			app.ui.dirty = false; last_visible = visible; last_text_blink = text_blink
 		}
 		if app.ui.bell {app.ui.bell = false; _ = sdl.FlashWindow(app.display.window, .BRIEFLY)}
 		if smoke {

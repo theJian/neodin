@@ -24,6 +24,8 @@ foreign rpc_lib {
 	nd_reader_free :: proc(r: rawptr) ---
 	nd_kind :: proc(n: Node) -> Kind ---
 	nd_int :: proc(n: Node) -> i64 ---
+	nd_number :: proc(n: Node) -> f64 ---
+	nd_handle :: proc(n: Node) -> i64 ---
 	nd_bool :: proc(n: Node) -> bool ---
 	nd_str :: proc(n: Node) -> [^]byte ---
 	nd_strlen :: proc(n: Node) -> u32 ---
@@ -44,6 +46,11 @@ foreign rpc_lib {
 }
 
 node_int :: proc(n: Node) -> int {return int(nd_int(n))}
+node_handle :: proc(n: Node) -> int {return int(nd_handle(n))}
+node_number :: proc(n: Node) -> f64 {
+	if nd_kind(n) == .Int || nd_kind(n) == .Uint {return f64(node_int(n))}
+	return nd_number(n)
+}
 node_string :: proc(n: Node) -> string {
 	if nd_kind(n) != .Str {return ""}
 	return string(nd_str(n)[:nd_strlen(n)])

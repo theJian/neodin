@@ -19,6 +19,7 @@ RPC :: struct {
 	input_inflight: bool,
 	attached, failed: bool,
 	channel: int,
+	ui_size: [2]int,
 	exited: bool,
 }
 
@@ -141,7 +142,18 @@ rpc_response :: proc(r: ^RPC, message: Node) {
 	result := node_at(message, 3)
 	switch p.kind {
 	case .Attach: r.attached = true
-	case .Api_Info: r.channel = node_int(node_at(result, 0))
+	case .Api_Info:
+		version, valid := neovim_version(result)
+		if !valid {
+			fmt.eprintln("Cannot read Neovim version from API metadata")
+			r.failed = true; return
+		}
+		if !neovim_version_supported(version) {
+			fmt.eprintf("Neodin requires Neovim 0.12 or newer (found %d.%d.%d)\n", version.major, version.minor, version.patch)
+			r.failed = true; return
+		}
+		r.channel = node_int(node_at(result, 0))
+		rpc_attach_ui(r)
 	case .Input, .Paste:
 		r.input_inflight = false
 		job := &r.input_queue[0]
@@ -169,10 +181,36 @@ rpc_lua :: proc(r: ^RPC, code: string, args: []Value = nil) {
 }
 
 rpc_attach :: proc(r: ^RPC, columns, rows: int) {
+	r.ui_size = {columns, rows}
 	_ = rpc_request(r, "nvim_get_api_info", nil, .Api_Info)
+}
+
+Neovim_Version :: struct {major, minor, patch: int}
+neovim_version :: proc(api_info: Node) -> (version: Neovim_Version, valid: bool) {
+	if node_count(api_info) < 2 {return}
+	metadata := node_at(api_info, 1)
+	if nd_kind(metadata) != .Map {return}
+	n := nd_get(metadata, "version")
+	if nd_kind(n) != .Map {return}
+	fields := []struct {key: cstring, value: ^int}{
+		{"major", &version.major}, {"minor", &version.minor}, {"patch", &version.patch},
+	}
+	for field in fields {
+		value := nd_get(n, field.key)
+		if nd_kind(value) != .Int && nd_kind(value) != .Uint {return}
+		field.value^ = node_int(value)
+		if field.value^ < 0 {return}
+	}
+	return version, true
+}
+neovim_version_supported :: proc(version: Neovim_Version) -> bool {
+	return version.major > 0 || (version.major == 0 && version.minor >= 12)
+}
+rpc_attach_ui :: proc(r: ^RPC) {
 	options := make(map[string]Value)
 	options["rgb"] = true
 	options["ext_linegrid"] = true
+	options["ext_multigrid"] = true
 	defer delete(options)
-	_ = rpc_request(r, "nvim_ui_attach", {i64(columns), i64(rows), options}, .Attach)
+	_ = rpc_request(r, "nvim_ui_attach", {i64(r.ui_size[0]), i64(r.ui_size[1]), options}, .Attach)
 }

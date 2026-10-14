@@ -60,9 +60,10 @@ mouse_position :: proc(d: ^Display, ui: ^UI, x, y: f32) -> (row, col: int) {
 mouse_input :: proc(r: ^RPC, d: ^Display, ui: ^UI, button, action: string, x, y: f32, mod: sdl.Keymod, clicks := 1) {
 	if !ui.mouse || !r.attached {return}
 	row, col := mouse_position(d, ui, x, y)
+	grid, local_row, local_col := ui_hit_grid(ui, row, col)
 	modifiers := key_modifiers(mod, true)
 	if clicks > 1 {modifiers = fmt.tprintf("%s-%d", modifiers, min(clicks, 4))}
-	_ = rpc_request(r, "nvim_input_mouse", {button, action, modifiers, i64(0), i64(row), i64(col)})
+	_ = rpc_request(r, "nvim_input_mouse", {button, action, modifiers, i64(grid), i64(local_row), i64(local_col)})
 }
 mouse_button_name :: proc(button: u8) -> string {
 	switch button {

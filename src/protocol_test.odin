@@ -4,6 +4,7 @@ import "core:slice"
 import "core:c"
 import "core:testing"
 import "core:time"
+import "core:os"
 
 Test_Stream :: struct {data: []byte, available, offset, chunk: int}
 test_read :: proc "c" (user: rawptr, data: [^]byte, size: c.size_t) -> c.size_t {
@@ -34,7 +35,7 @@ test_fragmented_rpc :: proc(t: ^testing.T) {
 	s.available = len(data)
 	testing.expect(t, nd_reader_parse(r) == 1)
 	ui: UI; ui_init(&ui); defer ui_destroy(&ui)
-	grid_resize(&ui.grid, 8, 2)
+	grid_resize(&ui_grid(&ui, 1).grid, 8, 2)
 	ui_redraw(&ui, node_at(nd_reader_root(r), 2))
 	testing.expect(t, ui.grid.cells[0].text == "界")
 	testing.expect(t, ui.grid.cells[1].text == "")
@@ -90,4 +91,48 @@ test_embedded_neovim :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, ui.grid.cells[0].text == "N" && ui.grid.cells[6].text == " ")
 	testing.expect(t, nd_reader_error(r.reader) == 0)
+}
+
+@(test)
+test_version_gate_before_ui_attach :: proc(t: ^testing.T) {
+	cases := []struct {major: i64, minor: Value, supported: bool}{
+		{0, i64(11), false}, {0, i64(12), true}, {0, i64(13), true},
+		{1, i64(0), true}, {0, "12", false},
+	}
+	for scenario in cases {
+		version := make(map[string]Value); defer delete(version)
+		version["major"] = scenario.major; version["minor"] = scenario.minor; version["patch"] = i64(0)
+		metadata := make(map[string]Value); defer delete(metadata)
+		metadata["version"] = version
+		data := test_encode(Value([]Value{i64(1), i64(1), nil, []Value{i64(7), metadata}}))
+		defer delete(data)
+		s := Test_Stream{data = data, available = len(data), chunk = len(data)}
+		reader := nd_reader_new(test_read, &s); defer nd_reader_free(reader)
+		testing.expect(t, nd_reader_parse(reader) == 1)
+		output, input, err := os.pipe()
+		if err != nil {testing.expect(t, false); return}
+		defer os.close(output); defer os.close(input)
+		r := RPC{input = input, serial = 1, ui_size = {80, 24}, pending = make(map[i64]Pending)}
+		defer delete(r.pending)
+		r.pending[1] = {.Api_Info, "nvim_get_api_info", 0}
+		rpc_response(&r, nd_reader_root(reader))
+		testing.expect(t, r.failed == !scenario.supported)
+		has_data, _ := os.pipe_has_data(output)
+		testing.expect(t, has_data == scenario.supported)
+		if !scenario.supported {
+			testing.expect(t, len(r.pending) == 0 && r.channel == 0)
+			continue
+		}
+		buffer: [512]byte
+		n, read_err := os.read(output, buffer[:])
+		testing.expect(t, read_err == nil)
+		request_stream := Test_Stream{data = buffer[:n], available = n, chunk = n}
+		request_reader := nd_reader_new(test_read, &request_stream); defer nd_reader_free(request_reader)
+		testing.expect(t, nd_reader_parse(request_reader) == 1)
+		request := nd_reader_root(request_reader)
+		testing.expect(t, node_string(node_at(request, 2)) == "nvim_ui_attach")
+		args := node_at(request, 3)
+		testing.expect(t, node_int(node_at(args, 0)) == 80 && node_int(node_at(args, 1)) == 24)
+		testing.expect(t, r.channel == 7 && !r.attached)
+	}
 }

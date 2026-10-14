@@ -135,7 +135,7 @@ fill_rect :: proc(d: ^Display, color: int, rect: sdl.FRect) {
 	set_color(d, color); _ = sdl.RenderFillRect(d.renderer, &r)
 }
 draw_text :: proc(d: ^Display, text: string, h: Highlight, rect: sdl.FRect) {
-	if text == "" || text == " " {return}
+	if text == "" || text == " " || !highlight_text_visible(h, sdl.GetTicks()) {return}
 	style := u8(0)
 	if h.bold {style |= 1}; if h.italic {style |= 2}
 	key := Text_Key{text, style}
@@ -160,6 +160,7 @@ draw_text :: proc(d: ^Display, text: string, h: Highlight, rect: sdl.FRect) {
 	_ = sdl.SetRenderScale(d.renderer, 1, 1)
 }
 draw_decorations :: proc(d: ^Display, h: Highlight, rect: sdl.FRect) {
+	if !highlight_text_visible(h, sdl.GetTicks()) {return}
 	set_color(d, h.special)
 	y := rect.y+rect.h-max(d.scale, 1)
 	if h.underline || h.underdouble {_ = sdl.RenderLine(d.renderer, rect.x, y, rect.x+rect.w, y)}
@@ -172,6 +173,10 @@ draw_decorations :: proc(d: ^Display, h: Highlight, rect: sdl.FRect) {
 		}
 	}
 	if h.strikethrough {set_color(d, h.foreground); _ = sdl.RenderLine(d.renderer, rect.x, rect.y+rect.h/2, rect.x+rect.w, rect.y+rect.h/2)}
+	if h.overline {set_color(d, h.foreground); _ = sdl.RenderLine(d.renderer, rect.x, rect.y+d.scale, rect.x+rect.w, rect.y+d.scale)}
+}
+highlight_text_visible :: proc(h: Highlight, ticks: u64) -> bool {
+	return !h.conceal && (!h.blink || ticks%1000 < 500)
 }
 cursor_visible :: proc(d: ^Display, ui: ^UI, config: Config) -> bool {
 	if ui.busy {return false}
@@ -186,12 +191,12 @@ display_draw :: proc(d: ^Display, ui: ^UI, config: Config, preedit: string) {
 	set_color(d, ui.background); _ = sdl.RenderClear(d.renderer)
 	g := &ui.grid
 	for y in 0..<g.height {for x in 0..<g.width {
-		cell := g.cells[y*g.width+x]; h := ui_highlight(ui, cell.highlight)
+		cell := g.cells[y*g.width+x]; h := ui_cell_highlight(ui, cell)
 		rect := sdl.FRect{d.padding+f32(x)*d.cell_width, d.padding+f32(y)*d.cell_height, d.cell_width, d.cell_height}
 		fill_rect(d, h.background, rect)
 	}}
 	for y in 0..<g.height {for x in 0..<g.width {
-		cell := g.cells[y*g.width+x]; h := ui_highlight(ui, cell.highlight)
+		cell := g.cells[y*g.width+x]; h := ui_cell_highlight(ui, cell)
 		rect := sdl.FRect{d.padding+f32(x)*d.cell_width, d.padding+f32(y)*d.cell_height, d.cell_width, d.cell_height}
 		if x+1 < g.width && g.cells[y*g.width+x+1].text == "" {rect.w *= 2}
 		draw_text(d, cell.text, h, rect); draw_decorations(d, h, rect)
